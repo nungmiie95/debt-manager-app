@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.12.5 (Monthly Notifications)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.12.7 (Optional Interest)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -103,7 +103,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.5</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.7</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -260,8 +260,9 @@
             const today = new Date();
             today.setHours(0,0,0,0);
             
+            const interestRate = Number(debt.interestRate) || 0;
             const monthsDiff = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
-            const totalInterest = monthsDiff > 0 ? (Number(debt.amount) || 0) * (Number(debt.interestRate) / 100) * monthsDiff : 0;
+            const totalInterest = monthsDiff > 0 ? (Number(debt.amount) || 0) * (interestRate / 100) * monthsDiff : 0;
             const totalDebt = (Number(debt.amount) || 0) + totalInterest;
             const totalPaid = state.payments.filter(p => p.debtId === debtId).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             const balance = totalDebt - totalPaid;
@@ -279,7 +280,7 @@
                     daysOverdue = getDaysDifference(today, dueDate);
                 }
             } else {
-                if (today.getDate() === startDate.getDate() && (today.getTime() !== startDate.getTime())) {
+                if (interestRate > 0 && today.getDate() === startDate.getDate() && (today.getTime() !== startDate.getTime())) {
                     isAnniversaryToday = true;
                     anniversaryMonth = `${today.getFullYear()}-${today.getMonth()}`;
                 }
@@ -332,16 +333,48 @@
             let totalPrincipal = state.debts.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
             let totalPaid = state.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             let totalInterest = 0, overdueDebtsCount = 0;
-            let upcomingDebts = [];
+            let allUpcomingDebts = [];
             
             state.debts.forEach(debt => {
                 const details = calculateDebtDetails(debt.id);
                 totalInterest += details.totalInterest;
                 if (details.isOverdue) overdueDebtsCount++;
+
+                if (details.balance <= 0) return; // Skip paid debts
+
+                // Logic for fixed due dates
                 if (debt.dueDate) {
                     const daysUntilDue = getDaysDifference(debt.dueDate, new Date());
-                    if (daysUntilDue >= 0 && daysUntilDue <= 30 && details.balance > 0) {
-                        upcomingDebts.push({ ...debt, daysUntilDue, balance: details.balance });
+                    if (daysUntilDue >= 0 && daysUntilDue <= 30) {
+                        allUpcomingDebts.push({ 
+                            ...debt, 
+                            daysUntilDue, 
+                            balance: details.balance,
+                            isMonthly: false 
+                        });
+                    }
+                } 
+                // Logic for monthly interest due dates
+                else if (debt.interestRate > 0) {
+                    const today = new Date();
+                    const startDate = new Date(debt.date);
+                    const anniversaryDay = startDate.getDate();
+
+                    let nextAnniversary = new Date(today.getFullYear(), today.getMonth(), anniversaryDay);
+                    
+                    if (nextAnniversary < today) {
+                        nextAnniversary.setMonth(nextAnniversary.getMonth() + 1);
+                    }
+
+                    const daysUntilDue = getDaysDifference(nextAnniversary, today);
+
+                    if (daysUntilDue >= 0 && daysUntilDue <= 30) {
+                        allUpcomingDebts.push({
+                            ...debt,
+                            daysUntilDue,
+                            balance: details.balance,
+                            isMonthly: true
+                        });
                     }
                 }
             });
@@ -363,16 +396,23 @@
                 ${overdueAlert}
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div class="lg:col-span-2 card bg-white p-6 rounded-lg shadow">
-                        <h3 class="text-lg font-semibold mb-4">🗓️ รายการหนี้ที่ใกล้ครบกำหนด (30 วันข้างหน้า)</h3>
+                        <h3 class="text-lg font-semibold mb-4">🗓️ รายการหนี้ที่ใกล้ถึงกำหนดชำระ (30 วันข้างหน้า)</h3>
                         <div class="overflow-x-auto">
                             <table class="w-full text-sm text-left">
-                                <thead class="text-xs text-gray-700 uppercase bg-gray-50"><tr><th class="px-4 py-2">ลูกหนี้</th><th class="px-4 py-2">ยอดคงเหลือ</th><th class="px-4 py-2">ครบกำหนดใน</th></tr></thead>
+                                <thead class="text-xs text-gray-700 uppercase bg-gray-50"><tr><th class="px-4 py-2">ลูกหนี้</th><th class="px-4 py-2">ยอดคงเหลือ</th><th class="px-4 py-2">รายละเอียด</th><th class="px-4 py-2">จะถึงกำหนดใน</th></tr></thead>
                                 <tbody>
-                                    ${upcomingDebts.length > 0 ? upcomingDebts.sort((a,b) => a.daysUntilDue - b.daysUntilDue).map(debt => `
-                                        <tr class="bg-white border-b"><td class="px-4 py-2 font-medium">${state.debtors.find(d => d.id === debt.debtorId)?.name || 'N/A'}</td>
-                                        <td class="px-4 py-2">${formatCurrency(debt.balance)}</td>
-                                        <td class="px-4 py-2"><span class="bg-yellow-100 text-yellow-800 text-xs font-medium mr-2 px-2.5 py-0.5 rounded">${debt.daysUntilDue} วัน</span></td></tr>
-                                    `).join('') : '<tr><td colspan="3" class="text-center py-4 text-gray-500">ไม่มีรายการ</td></tr>'}
+                                    ${allUpcomingDebts.length > 0 ? allUpcomingDebts.sort((a,b) => a.daysUntilDue - b.daysUntilDue).map(debt => {
+                                        const detailText = debt.isMonthly 
+                                            ? '<span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">รอบชำระดอกเบี้ย</span>' 
+                                            : '<span class="bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-0.5 rounded">วันครบกำหนด</span>';
+                                        return `
+                                        <tr class="bg-white border-b">
+                                            <td class="px-4 py-2 font-medium">${state.debtors.find(d => d.id === debt.debtorId)?.name || 'N/A'}</td>
+                                            <td class="px-4 py-2">${formatCurrency(debt.balance)}</td>
+                                            <td class="px-4 py-2">${detailText}</td>
+                                            <td class="px-4 py-2"><span class="bg-yellow-100 text-yellow-800 text-xs font-medium mr-2 px-2.5 py-0.5 rounded">${debt.daysUntilDue} วัน</span></td>
+                                        </tr>
+                                    `}).join('') : '<tr><td colspan="4" class="text-center py-4 text-gray-500">ไม่มีรายการ</td></tr>'}
                                 </tbody>
                             </table>
                         </div>
@@ -420,7 +460,7 @@
                         <form id="debt-form" class="space-y-4">
                             <input type="hidden" id="debt-id">
                             <div><label for="debt-debtor-id" class="block text-sm font-medium text-gray-700">เลือกลูกหนี้*</label><select id="debt-debtor-id" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required><option value="">-- เลือกลูกหนี้ --</option>${state.debtors.map(d => `<option value="${d.id}">${d.name}</option>`).join('')}</select></div>
-                            <div class="grid grid-cols-2 gap-4"><div><label for="debt-amount" class="block text-sm font-medium text-gray-700">จำนวนเงิน (บาท)*</label><input type="number" id="debt-amount" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-interest-rate" class="block text-sm font-medium text-gray-700">อัตราดอกเบี้ย (%/เดือน)*</label><input type="number" id="debt-interest-rate" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div></div>
+                            <div class="grid grid-cols-2 gap-4"><div><label for="debt-amount" class="block text-sm font-medium text-gray-700">จำนวนเงิน (บาท)*</label><input type="number" id="debt-amount" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-interest-rate" class="block text-sm font-medium text-gray-700">อัตราดอกเบี้ย (%/เดือน)</label><input type="number" id="debt-interest-rate" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"></div></div>
                             <div class="grid grid-cols-2 gap-4"><div><label for="debt-date" class="block text-sm font-medium text-gray-700">วันที่ให้กู้*</label><input type="date" id="debt-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-due-date" class="block text-sm font-medium text-gray-700">วันครบกำหนด</label><input type="date" id="debt-due-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"></div></div>
                             <div><label for="debt-type" class="block text-sm font-medium text-gray-700">ประเภทหนี้</label><select id="debt-type" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"><option>เงินกู้ส่วนบุคคล</option><option>เงินกู้ธุรกิจ</option><option>เงินกู้ฉุกเฉิน</option><option>อื่นๆ</option></select></div>
                             <div><label for="debt-evidence-file" class="block text-sm font-medium text-gray-700">หลักฐานการกู้ (รูปภาพ/PDF)</label><label for="debt-evidence-file" class="file-input-label mt-1 flex justify-center px-6 pt-5 pb-6 rounded-md"><div class="space-y-1 text-center"><svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="text-sm text-gray-600" id="debt-evidence-name">คลิกเพื่อเลือกไฟล์</p></div></label><input type="file" id="debt-evidence-file" class="hidden" accept="image/*,.pdf"></div>
@@ -431,8 +471,32 @@
                     <div class="lg:col-span-2 card bg-white p-6 rounded-lg shadow">
                         <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-semibold">📋 รายการหนี้ทั้งหมด (${filteredDebts.length})</h3><input type="text" id="debts-search-input" placeholder="🔍 ค้นหาชื่อลูกหนี้..." class="form-input rounded-md border-gray-300 shadow-sm w-1/2" value="${state.debtsSearchQuery}"></div>
                         <div class="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                            ${filteredDebts.length > 0 ? filteredDebts.map(debt => { const details = calculateDebtDetails(debt.id); const debtor = state.debtors.find(d => d.id === debt.debtorId); const overdueBadge = details.isOverdue ? `<span class="bg-red-100 text-red-800 text-xs font-bold mr-2 px-2.5 py-0.5 rounded-full">เกินกำหนด ${details.daysOverdue} วัน</span>` : ''; return `
-                                    <div class="border p-4 rounded-lg ${details.isOverdue ? 'bg-red-50' : 'bg-gray-50'}"><div class="flex justify-between items-start"><div><h4 class="font-bold text-lg">${debtor?.name || 'ไม่พบชื่อ'} ${overdueBadge}</h4><p class="text-sm text-gray-600">เงินต้น: ${formatCurrency(debt.amount)} | ดอกเบี้ย (${debt.interestRate}%/เดือน)</p><p class="text-sm text-gray-600">วันที่กู้: ${formatDateToBuddhist(debt.date)} | ครบกำหนด: ${debt.dueDate ? formatDateToBuddhist(debt.dueDate) : 'ไม่มีกำหนด'}</p></div><div class="flex space-x-2">${debt.evidence ? `<button data-id="${debt.id}" data-type="debt" class="view-evidence-btn p-2 text-gray-500 hover:text-blue-600">📎</button>` : ''}<button data-id="${debt.id}" class="edit-debt-btn p-2 text-gray-500 hover:text-blue-600">✏️</button><button data-id="${debt.id}" class="delete-debt-btn p-2 text-gray-500 hover:text-red-600">🗑️</button></div></div><div class="mt-3 pt-3 border-t grid grid-cols-3 gap-2 text-sm text-center"><div><span class="block text-gray-500">ยอดรวม</span><span class="font-semibold">${formatCurrency(details.totalDebt)}</span></div><div><span class="block text-gray-500 text-green-600">ชำระแล้ว</span><span class="font-semibold text-green-600">${formatCurrency(details.totalPaid)}</span></div><div><span class="block text-gray-500 text-red-600">คงเหลือ</span><span class="font-semibold text-red-600">${formatCurrency(details.balance)}</span></div></div></div>`; }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีข้อมูลหนี้สิน</p>'}
+                            ${filteredDebts.length > 0 ? filteredDebts.map(debt => { 
+                                const details = calculateDebtDetails(debt.id); 
+                                const debtor = state.debtors.find(d => d.id === debt.debtorId); 
+                                const overdueBadge = details.isOverdue ? `<span class="bg-red-100 text-red-800 text-xs font-bold mr-2 px-2.5 py-0.5 rounded-full">เกินกำหนด ${details.daysOverdue} วัน</span>` : ''; 
+                                const interestText = (debt.interestRate && debt.interestRate > 0) ? `| ดอกเบี้ย (${debt.interestRate}%/เดือน)` : '| ไม่มีดอกเบี้ย';
+                                return `
+                                    <div class="border p-4 rounded-lg ${details.isOverdue ? 'bg-red-50' : 'bg-gray-50'}">
+                                        <div class="flex justify-between items-start">
+                                            <div>
+                                                <h4 class="font-bold text-lg">${debtor?.name || 'ไม่พบชื่อ'} ${overdueBadge}</h4>
+                                                <p class="text-sm text-gray-600">เงินต้น: ${formatCurrency(debt.amount)} ${interestText}</p>
+                                                <p class="text-sm text-gray-600">วันที่กู้: ${formatDateToBuddhist(debt.date)} | ครบกำหนด: ${debt.dueDate ? formatDateToBuddhist(debt.dueDate) : 'ไม่มีกำหนด'}</p>
+                                            </div>
+                                            <div class="flex space-x-2">
+                                                ${debt.evidence ? `<button data-id="${debt.id}" data-type="debt" class="view-evidence-btn p-2 text-gray-500 hover:text-blue-600">📎</button>` : ''}
+                                                <button data-id="${debt.id}" class="edit-debt-btn p-2 text-gray-500 hover:text-blue-600">✏️</button>
+                                                <button data-id="${debt.id}" class="delete-debt-btn p-2 text-gray-500 hover:text-red-600">🗑️</button>
+                                            </div>
+                                        </div>
+                                        <div class="mt-3 pt-3 border-t grid grid-cols-3 gap-2 text-sm text-center">
+                                            <div><span class="block text-gray-500">ยอดรวม</span><span class="font-semibold">${formatCurrency(details.totalDebt)}</span></div>
+                                            <div><span class="block text-gray-500 text-green-600">ชำระแล้ว</span><span class="font-semibold text-green-600">${formatCurrency(details.totalPaid)}</span></div>
+                                            <div><span class="block text-gray-500 text-red-600">คงเหลือ</span><span class="font-semibold text-red-600">${formatCurrency(details.balance)}</span></div>
+                                        </div>
+                                    </div>`; 
+                            }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีข้อมูลหนี้สิน</p>'}
                         </div>
                     </div>
                 </div>
@@ -659,13 +723,14 @@
                 
                 const debtData = {
                     id: id || generateId(), debtorId: form.querySelector('#debt-debtor-id').value, 
-                    amount: parseFloat(form.querySelector('#debt-amount').value), interestRate: parseFloat(form.querySelector('#debt-interest-rate').value),
+                    amount: parseFloat(form.querySelector('#debt-amount').value), 
+                    interestRate: parseFloat(form.querySelector('#debt-interest-rate').value) || 0,
                     date: form.querySelector('#debt-date').value, dueDate: form.querySelector('#debt-due-date').value, 
                     type: form.querySelector('#debt-type').value, description: form.querySelector('#debt-description').value.trim(), 
                     createdAt: id ? state.debts.find(d => d.id === id).createdAt : new Date().toISOString(), evidence: evidenceUrl
                 };
 
-                if (!debtData.debtorId || !debtData.amount || isNaN(debtData.amount) || !debtData.interestRate || isNaN(debtData.interestRate) || !debtData.date) {
+                if (!debtData.debtorId || !debtData.amount || isNaN(debtData.amount) || !debtData.date) {
                     throw new Error('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วนและถูกต้อง');
                 }
 
@@ -737,7 +802,7 @@
             document.getElementById('debt-id').value = debt.id;
             document.getElementById('debt-debtor-id').value = debt.debtorId;
             document.getElementById('debt-amount').value = debt.amount;
-            document.getElementById('debt-interest-rate').value = debt.interestRate;
+            document.getElementById('debt-interest-rate').value = debt.interestRate || '';
             document.getElementById('debt-date').value = debt.date ? new Date(debt.date).toISOString().substring(0, 10) : '';
             document.getElementById('debt-due-date').value = debt.dueDate ? new Date(debt.dueDate).toISOString().substring(0, 10) : '';
             document.getElementById('debt-type').value = debt.type;
@@ -958,5 +1023,4 @@
 
 </body>
 </html>
-
 
