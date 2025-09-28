@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.12.1 (Stability Fix)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.12.5 (Monthly Notifications)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -103,7 +103,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.1</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.5</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -190,13 +190,29 @@
         // --- UTILITY FUNCTIONS ---
         const generateId = () => '_' + Math.random().toString(36).substr(2, 9);
         const formatCurrency = (amount) => new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(amount || 0);
-        const formatDate = (dateString) => dateString ? new Date(dateString).toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+        
+        const formatDateToBuddhist = (dateString) => {
+            if (!dateString) return '';
+            try {
+                const date = new Date(dateString);
+                return date.toLocaleDateString('th-TH', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    calendar: 'buddhist'
+                });
+            } catch (e) {
+                console.error("Invalid date for formatting:", dateString);
+                return 'N/A';
+            }
+        };
+
         const getDaysDifference = (date1, date2) => Math.round((new Date(date1) - new Date(date2)) / (1000 * 60 * 60 * 24));
         
         // --- UI UTILITIES ---
         const showLoadingOverlay = (message) => {
             let overlay = document.getElementById('loading-overlay');
-            if (overlay) overlay.remove(); // Remove existing before creating a new one
+            if (overlay) overlay.remove();
             overlay = document.createElement('div');
             overlay.id = 'loading-overlay';
             overlay.className = 'fixed inset-0 z-50 flex items-center justify-center modal-backdrop text-white';
@@ -238,22 +254,38 @@
         // --- CALCULATION LOGIC ---
         const calculateDebtDetails = (debtId) => {
             const debt = state.debts.find(d => d.id === debtId);
-            if (!debt) return { totalInterest: 0, totalPaid: 0, balance: 0, isOverdue: false, daysOverdue: 0 };
+            if (!debt) return { totalInterest: 0, totalPaid: 0, balance: 0, isOverdue: false, daysOverdue: 0, isAnniversaryToday: false };
             
             const startDate = new Date(debt.date);
             const today = new Date();
             today.setHours(0,0,0,0);
+            
             const monthsDiff = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
             const totalInterest = monthsDiff > 0 ? (Number(debt.amount) || 0) * (Number(debt.interestRate) / 100) * monthsDiff : 0;
             const totalDebt = (Number(debt.amount) || 0) + totalInterest;
             const totalPaid = state.payments.filter(p => p.debtId === debtId).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             const balance = totalDebt - totalPaid;
-            const dueDate = new Date(debt.dueDate);
-            dueDate.setHours(0,0,0,0);
-            const isOverdue = dueDate < today && balance > 0;
-            const daysOverdue = isOverdue ? getDaysDifference(today, debt.dueDate) : 0;
+
+            let isOverdue = false;
+            let daysOverdue = 0;
+            let isAnniversaryToday = false;
+            let anniversaryMonth = null;
+
+            if (debt.dueDate) {
+                const dueDate = new Date(debt.dueDate);
+                dueDate.setHours(0, 0, 0, 0);
+                if (dueDate < today && balance > 0) {
+                    isOverdue = true;
+                    daysOverdue = getDaysDifference(today, dueDate);
+                }
+            } else {
+                if (today.getDate() === startDate.getDate() && (today.getTime() !== startDate.getTime())) {
+                    isAnniversaryToday = true;
+                    anniversaryMonth = `${today.getFullYear()}-${today.getMonth()}`;
+                }
+            }
             
-            return { totalInterest, totalPaid, balance, totalDebt, isOverdue, daysOverdue };
+            return { totalInterest, totalPaid, balance, totalDebt, isOverdue, daysOverdue, isAnniversaryToday, anniversaryMonth };
         };
 
         const getDebtorSummary = (debtorId) => ({
@@ -306,9 +338,11 @@
                 const details = calculateDebtDetails(debt.id);
                 totalInterest += details.totalInterest;
                 if (details.isOverdue) overdueDebtsCount++;
-                const daysUntilDue = getDaysDifference(debt.dueDate, new Date());
-                if (daysUntilDue >= 0 && daysUntilDue <= 30 && details.balance > 0) {
-                    upcomingDebts.push({ ...debt, daysUntilDue, balance: details.balance });
+                if (debt.dueDate) {
+                    const daysUntilDue = getDaysDifference(debt.dueDate, new Date());
+                    if (daysUntilDue >= 0 && daysUntilDue <= 30 && details.balance > 0) {
+                        upcomingDebts.push({ ...debt, daysUntilDue, balance: details.balance });
+                    }
                 }
             });
 
@@ -387,7 +421,7 @@
                             <input type="hidden" id="debt-id">
                             <div><label for="debt-debtor-id" class="block text-sm font-medium text-gray-700">เลือกลูกหนี้*</label><select id="debt-debtor-id" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required><option value="">-- เลือกลูกหนี้ --</option>${state.debtors.map(d => `<option value="${d.id}">${d.name}</option>`).join('')}</select></div>
                             <div class="grid grid-cols-2 gap-4"><div><label for="debt-amount" class="block text-sm font-medium text-gray-700">จำนวนเงิน (บาท)*</label><input type="number" id="debt-amount" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-interest-rate" class="block text-sm font-medium text-gray-700">อัตราดอกเบี้ย (%/เดือน)*</label><input type="number" id="debt-interest-rate" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div></div>
-                             <div class="grid grid-cols-2 gap-4"><div><label for="debt-date" class="block text-sm font-medium text-gray-700">วันที่ให้กู้*</label><input type="date" id="debt-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-due-date" class="block text-sm font-medium text-gray-700">วันครบกำหนด*</label><input type="date" id="debt-due-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div></div>
+                            <div class="grid grid-cols-2 gap-4"><div><label for="debt-date" class="block text-sm font-medium text-gray-700">วันที่ให้กู้*</label><input type="date" id="debt-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-due-date" class="block text-sm font-medium text-gray-700">วันครบกำหนด</label><input type="date" id="debt-due-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"></div></div>
                             <div><label for="debt-type" class="block text-sm font-medium text-gray-700">ประเภทหนี้</label><select id="debt-type" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"><option>เงินกู้ส่วนบุคคล</option><option>เงินกู้ธุรกิจ</option><option>เงินกู้ฉุกเฉิน</option><option>อื่นๆ</option></select></div>
                             <div><label for="debt-evidence-file" class="block text-sm font-medium text-gray-700">หลักฐานการกู้ (รูปภาพ/PDF)</label><label for="debt-evidence-file" class="file-input-label mt-1 flex justify-center px-6 pt-5 pb-6 rounded-md"><div class="space-y-1 text-center"><svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="text-sm text-gray-600" id="debt-evidence-name">คลิกเพื่อเลือกไฟล์</p></div></label><input type="file" id="debt-evidence-file" class="hidden" accept="image/*,.pdf"></div>
                             <div><label for="debt-description" class="block text-sm font-medium text-gray-700">รายละเอียด</label><textarea id="debt-description" rows="2" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"></textarea></div>
@@ -398,7 +432,7 @@
                         <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-semibold">📋 รายการหนี้ทั้งหมด (${filteredDebts.length})</h3><input type="text" id="debts-search-input" placeholder="🔍 ค้นหาชื่อลูกหนี้..." class="form-input rounded-md border-gray-300 shadow-sm w-1/2" value="${state.debtsSearchQuery}"></div>
                         <div class="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
                             ${filteredDebts.length > 0 ? filteredDebts.map(debt => { const details = calculateDebtDetails(debt.id); const debtor = state.debtors.find(d => d.id === debt.debtorId); const overdueBadge = details.isOverdue ? `<span class="bg-red-100 text-red-800 text-xs font-bold mr-2 px-2.5 py-0.5 rounded-full">เกินกำหนด ${details.daysOverdue} วัน</span>` : ''; return `
-                                    <div class="border p-4 rounded-lg ${details.isOverdue ? 'bg-red-50' : 'bg-gray-50'}"><div class="flex justify-between items-start"><div><h4 class="font-bold text-lg">${debtor?.name || 'ไม่พบชื่อ'} ${overdueBadge}</h4><p class="text-sm text-gray-600">เงินต้น: ${formatCurrency(debt.amount)} | ดอกเบี้ย (${debt.interestRate}%/เดือน)</p><p class="text-sm text-gray-600">วันที่กู้: ${formatDate(debt.date)} | ครบกำหนด: ${formatDate(debt.dueDate)}</p></div><div class="flex space-x-2">${debt.evidence ? `<button data-id="${debt.id}" data-type="debt" class="view-evidence-btn p-2 text-gray-500 hover:text-blue-600">📎</button>` : ''}<button data-id="${debt.id}" class="edit-debt-btn p-2 text-gray-500 hover:text-blue-600">✏️</button><button data-id="${debt.id}" class="delete-debt-btn p-2 text-gray-500 hover:text-red-600">🗑️</button></div></div><div class="mt-3 pt-3 border-t grid grid-cols-3 gap-2 text-sm text-center"><div><span class="block text-gray-500">ยอดรวม</span><span class="font-semibold">${formatCurrency(details.totalDebt)}</span></div><div><span class="block text-gray-500 text-green-600">ชำระแล้ว</span><span class="font-semibold text-green-600">${formatCurrency(details.totalPaid)}</span></div><div><span class="block text-gray-500 text-red-600">คงเหลือ</span><span class="font-semibold text-red-600">${formatCurrency(details.balance)}</span></div></div></div>`; }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีข้อมูลหนี้สิน</p>'}
+                                    <div class="border p-4 rounded-lg ${details.isOverdue ? 'bg-red-50' : 'bg-gray-50'}"><div class="flex justify-between items-start"><div><h4 class="font-bold text-lg">${debtor?.name || 'ไม่พบชื่อ'} ${overdueBadge}</h4><p class="text-sm text-gray-600">เงินต้น: ${formatCurrency(debt.amount)} | ดอกเบี้ย (${debt.interestRate}%/เดือน)</p><p class="text-sm text-gray-600">วันที่กู้: ${formatDateToBuddhist(debt.date)} | ครบกำหนด: ${debt.dueDate ? formatDateToBuddhist(debt.dueDate) : 'ไม่มีกำหนด'}</p></div><div class="flex space-x-2">${debt.evidence ? `<button data-id="${debt.id}" data-type="debt" class="view-evidence-btn p-2 text-gray-500 hover:text-blue-600">📎</button>` : ''}<button data-id="${debt.id}" class="edit-debt-btn p-2 text-gray-500 hover:text-blue-600">✏️</button><button data-id="${debt.id}" class="delete-debt-btn p-2 text-gray-500 hover:text-red-600">🗑️</button></div></div><div class="mt-3 pt-3 border-t grid grid-cols-3 gap-2 text-sm text-center"><div><span class="block text-gray-500">ยอดรวม</span><span class="font-semibold">${formatCurrency(details.totalDebt)}</span></div><div><span class="block text-gray-500 text-green-600">ชำระแล้ว</span><span class="font-semibold text-green-600">${formatCurrency(details.totalPaid)}</span></div><div><span class="block text-gray-500 text-red-600">คงเหลือ</span><span class="font-semibold text-red-600">${formatCurrency(details.balance)}</span></div></div></div>`; }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีข้อมูลหนี้สิน</p>'}
                         </div>
                     </div>
                 </div>
@@ -423,7 +457,7 @@
                     <div class="lg:col-span-2 card bg-white p-6 rounded-lg shadow">
                          <h3 class="text-lg font-semibold mb-4">📜 ประวัติการชำระหนี้ทั้งหมด</h3>
                          <div class="relative pl-4 border-l-2 border-gray-200 max-h-[60vh] overflow-y-auto pr-2">
-                             ${state.payments.length > 0 ? [...state.payments].reverse().map(p => { const debtor = state.debtors.find(d => d.id === p.debtorId); return `<div class="mb-6 relative timeline-item"><div class="font-semibold">${debtor?.name || 'N/A'}</div><time class="text-sm font-normal leading-none text-gray-400">${formatDate(p.date)}</time><p class="text-base font-normal text-gray-600">ชำระเงินจำนวน <span class="font-bold text-green-600">${formatCurrency(p.amount)}</span> ผ่าน ${p.method}.</p>${p.note ? `<p class="text-sm text-gray-500 bg-gray-100 p-2 rounded-md mt-1">หมายเหตุ: ${p.note}</p>` : ''}${p.evidence ? `<button data-id="${p.id}" data-type="payment" class="view-evidence-btn text-sm text-blue-600 hover:underline mt-1">📎 ดูหลักฐาน</button>` : ''}</div>` }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีประวัติการชำระเงิน</p>'}
+                             ${state.payments.length > 0 ? [...state.payments].reverse().map(p => { const debtor = state.debtors.find(d => d.id === p.debtorId); return `<div class="mb-6 relative timeline-item"><div class="font-semibold">${debtor?.name || 'N/A'}</div><time class="text-sm font-normal leading-none text-gray-400">${formatDateToBuddhist(p.date)}</time><p class="text-base font-normal text-gray-600">ชำระเงินจำนวน <span class="font-bold text-green-600">${formatCurrency(p.amount)}</span> ผ่าน ${p.method}.</p>${p.note ? `<p class="text-sm text-gray-500 bg-gray-100 p-2 rounded-md mt-1">หมายเหตุ: ${p.note}</p>` : ''}${p.evidence ? `<button data-id="${p.id}" data-type="payment" class="view-evidence-btn text-sm text-blue-600 hover:underline mt-1">📎 ดูหลักฐาน</button>` : ''}</div>` }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีประวัติการชำระเงิน</p>'}
                          </div>
                     </div>
                 </div>
@@ -488,7 +522,12 @@
         };
 
         const renderNotificationItem = (notification) => {
-            const colors = { overdue: 'border-red-500', upcoming: 'border-yellow-500', payment: 'border-green-500' };
+            const colors = { 
+                overdue: 'border-red-500', 
+                upcoming: 'border-yellow-500', 
+                payment: 'border-green-500',
+                interest_due: 'border-blue-500'
+            };
             return `
                 <div class="p-3 rounded-lg border-l-4 ${colors[notification.type] || 'border-gray-500'} ${notification.read ? 'bg-gray-100' : 'bg-blue-50'}">
                     <div class="flex justify-between items-start">
@@ -582,7 +621,7 @@
                  console.error("Load error:", error);
                  updateSyncStatus('error');
                  showAlert(`ไม่สามารถโหลดข้อมูลจาก Google Sheets ได้: ${error.message} กำลังใช้ข้อมูลสำรองล่าสุด`, 'error');
-                 loadLocalBackup(); // Load from backup if cloud fails
+                 loadLocalBackup();
             }
         };
 
@@ -617,12 +656,19 @@
                 const fileInput = form.querySelector('#debt-evidence-file');
                 let evidenceUrl = id ? state.debts.find(d => d.id === id).evidence : '';
                 if (fileInput.files[0]) { submitBtn.textContent = 'กำลังอัปโหลดไฟล์...'; evidenceUrl = await uploadFileToDrive(fileInput.files[0]); }
+                
                 const debtData = {
-                    id: id || generateId(), debtorId: form.querySelector('#debt-debtor-id').value, amount: parseFloat(form.querySelector('#debt-amount').value), interestRate: parseFloat(form.querySelector('#debt-interest-rate').value),
-                    date: form.querySelector('#debt-date').value, dueDate: form.querySelector('#debt-due-date').value, type: form.querySelector('#debt-type').value,
-                    description: form.querySelector('#debt-description').value.trim(), createdAt: id ? state.debts.find(d => d.id === id).createdAt : new Date().toISOString(), evidence: evidenceUrl
+                    id: id || generateId(), debtorId: form.querySelector('#debt-debtor-id').value, 
+                    amount: parseFloat(form.querySelector('#debt-amount').value), interestRate: parseFloat(form.querySelector('#debt-interest-rate').value),
+                    date: form.querySelector('#debt-date').value, dueDate: form.querySelector('#debt-due-date').value, 
+                    type: form.querySelector('#debt-type').value, description: form.querySelector('#debt-description').value.trim(), 
+                    createdAt: id ? state.debts.find(d => d.id === id).createdAt : new Date().toISOString(), evidence: evidenceUrl
                 };
-                if (!debtData.debtorId || !debtData.amount || !debtData.interestRate || !debtData.date || !debtData.dueDate) { throw new Error('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน'); }
+
+                if (!debtData.debtorId || !debtData.amount || isNaN(debtData.amount) || !debtData.interestRate || isNaN(debtData.interestRate) || !debtData.date) {
+                    throw new Error('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วนและถูกต้อง');
+                }
+
                 if (id) {
                     const index = state.debts.findIndex(d => d.id === id);
                     if (index > -1) state.debts[index] = debtData;
@@ -663,7 +709,7 @@
             const oldUrl = state.settings.googleSheetUrl;
             state.settings.googleSheetUrl = document.getElementById('google-sheet-url').value.trim();
             
-            localStorage.setItem('debtManagerData_backup', JSON.stringify(state)); // Save settings immediately
+            localStorage.setItem('debtManagerData_backup', JSON.stringify(state));
             showAlert('บันทึกการตั้งค่าสำเร็จแล้ว');
 
             if (state.settings.googleSheetUrl && oldUrl !== state.settings.googleSheetUrl) {
@@ -692,8 +738,8 @@
             document.getElementById('debt-debtor-id').value = debt.debtorId;
             document.getElementById('debt-amount').value = debt.amount;
             document.getElementById('debt-interest-rate').value = debt.interestRate;
-            document.getElementById('debt-date').value = debt.date;
-            document.getElementById('debt-due-date').value = debt.dueDate;
+            document.getElementById('debt-date').value = debt.date ? new Date(debt.date).toISOString().substring(0, 10) : '';
+            document.getElementById('debt-due-date').value = debt.dueDate ? new Date(debt.dueDate).toISOString().substring(0, 10) : '';
             document.getElementById('debt-type').value = debt.type;
             document.getElementById('debt-description').value = debt.description || '';
             document.getElementById('debt-form-title').textContent = '💳 แก้ไขรายการหนี้';
@@ -726,38 +772,65 @@
                 badge.classList.add('hidden');
             }
         };
+
+        const attachNotificationPanelListeners = () => {
+            document.getElementById('close-notification-panel')?.addEventListener('click', toggleNotificationPanel);
+            document.getElementById('notification-backdrop')?.addEventListener('click', toggleNotificationPanel);
+            document.getElementById('mark-all-read-btn')?.addEventListener('click', () => { 
+                state.notifications.forEach(n => n.read = true); 
+                saveData(); 
+                updateNotificationBell();
+                refreshNotificationPanel();
+            });
+            document.getElementById('delete-all-btn')?.addEventListener('click', () => { 
+                state.notifications = []; 
+                saveData(); 
+                updateNotificationBell();
+                toggleNotificationPanel();
+            });
+            document.querySelectorAll('.mark-read-btn').forEach(btn => btn.addEventListener('click', (e) => handleMarkNotificationRead(e.currentTarget.dataset.id)));
+            document.querySelectorAll('.delete-notification-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeleteNotification(e.currentTarget.dataset.id)));
+        };
+
+        const refreshNotificationPanel = () => {
+            renderNotificationPanel();
+            document.getElementById('notification-panel')?.classList.add('open');
+            document.getElementById('notification-backdrop')?.classList.remove('hidden');
+            attachNotificationPanelListeners();
+        };
+
         const toggleNotificationPanel = () => {
-            renderNotificationPanel(); // Re-render every time it's opened
-            const panel = document.getElementById('notification-panel');
-            const backdrop = document.getElementById('notification-backdrop');
-            const isOpen = panel.classList.contains('open');
+            let panel = document.getElementById('notification-panel');
+            const isOpen = panel && panel.classList.contains('open');
+
             if (isOpen) {
                 panel.classList.remove('open');
-                backdrop.classList.add('hidden');
+                document.getElementById('notification-backdrop').classList.add('hidden');
             } else {
-                panel.classList.add('open');
-                backdrop.classList.remove('hidden');
-                // Attach listeners for the newly created panel
-                document.getElementById('close-notification-panel').addEventListener('click', toggleNotificationPanel);
-                backdrop.addEventListener('click', toggleNotificationPanel);
-                document.getElementById('mark-all-read-btn').addEventListener('click', () => { state.notifications.forEach(n => n.read = true); saveData(); toggleNotificationPanel(); updateNotificationBell();});
-                document.getElementById('delete-all-btn').addEventListener('click', () => { state.notifications = []; saveData(); toggleNotificationPanel(); updateNotificationBell();});
-                document.querySelectorAll('.mark-read-btn').forEach(btn => btn.addEventListener('click', (e) => handleMarkNotificationRead(e.currentTarget.dataset.id)));
-                document.querySelectorAll('.delete-notification-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeleteNotification(e.currentTarget.dataset.id)));
+                renderNotificationPanel();
+                panel = document.getElementById('notification-panel');
+                const backdrop = document.getElementById('notification-backdrop');
+                
+                setTimeout(() => {
+                    panel.classList.add('open');
+                    backdrop.classList.remove('hidden');
+                }, 10);
+                
+                attachNotificationPanelListeners();
             }
         };
         const handleMarkNotificationRead = (id) => {
             const notification = state.notifications.find(n => n.id === id);
             if (notification) notification.read = true;
             saveData();
-            toggleNotificationPanel(); // Re-render the panel
-            toggleNotificationPanel(); // to show the changes
+            updateNotificationBell();
+            refreshNotificationPanel();
         };
         const handleDeleteNotification = (id) => {
             state.notifications = state.notifications.filter(n => n.id !== id);
             saveData();
-            toggleNotificationPanel(); // Re-render the panel
-            toggleNotificationPanel(); // to show the changes
+            updateNotificationBell();
+            refreshNotificationPanel();
         };
         const updateDebtsForPaymentForm = (debtorId) => {
             const debtSelectEl = document.getElementById('payment-debt-id');
@@ -781,34 +854,54 @@
             }
         };
         const createNotification = (data) => {
-            const newNotification = { id: generateId(), read: false, ...data };
+            const newNotification = { id: generateId(), read: false, createdAt: new Date().toISOString(), ...data };
             state.notifications.push(newNotification);
         };
         const checkNotifications = () => {
             const now = new Date();
+            let hasNewNotifications = false;
+
             state.debts.forEach(debt => {
                 const details = calculateDebtDetails(debt.id);
-                if (details.balance <= 0) return; // Ignore paid debts
-                
-                // Overdue
+                const debtor = state.debtors.find(d => d.id === debt.debtorId);
+                if (!debtor || details.balance <= 0) return;
+
                 if (details.isOverdue && state.settings.notifications.overdue) {
                     const existing = state.notifications.find(n => n.debtId === debt.id && n.type === 'overdue');
                     if (!existing) {
-                        createNotification({ debtId: debt.id, type: 'overdue', title: 'หนี้เกินกำหนด!', message: `ลูกหนี้ ${state.debtors.find(d=>d.id===debt.debtorId)?.name} เกินกำหนดชำระ ${details.daysOverdue} วัน` });
+                        createNotification({ debtId: debt.id, type: 'overdue', title: 'หนี้เกินกำหนด!', message: `ลูกหนี้ ${debtor.name} เกินกำหนดชำระ ${details.daysOverdue} วัน` });
+                        hasNewNotifications = true;
                     }
                 }
 
-                // Upcoming
-                const daysUntilDue = getDaysDifference(debt.dueDate, now);
-                if (daysUntilDue >= 0 && daysUntilDue <= state.settings.notifications.daysInAdvance && state.settings.notifications.upcoming) {
-                    const existing = state.notifications.find(n => n.debtId === debt.id && n.type === 'upcoming');
+                if (debt.dueDate && state.settings.notifications.upcoming) {
+                    const daysUntilDue = getDaysDifference(debt.dueDate, now);
+                    if (daysUntilDue >= 0 && daysUntilDue <= state.settings.notifications.daysInAdvance) {
+                        const existing = state.notifications.find(n => n.debtId === debt.id && n.type === 'upcoming');
+                        if (!existing) {
+                             createNotification({ debtId: debt.id, type: 'upcoming', title: 'ใกล้ครบกำหนดชำระ', message: `ลูกหนี้ ${debtor.name} จะครบกำหนดใน ${daysUntilDue} วัน` });
+                             hasNewNotifications = true;
+                        }
+                    }
+                }
+                
+                if (!debt.dueDate && details.isAnniversaryToday) {
+                    const existing = state.notifications.find(n => n.debtId === debt.id && n.type === 'interest_due' && n.anniversaryMonth === details.anniversaryMonth);
                     if (!existing) {
-                         createNotification({ debtId: debt.id, type: 'upcoming', title: 'ใกล้ครบกำหนดชำระ', message: `ลูกหนี้ ${state.debtors.find(d=>d.id===debt.debtorId)?.name} จะครบกำหนดใน ${daysUntilDue} วัน` });
+                        createNotification({ 
+                            debtId: debt.id, type: 'interest_due', title: 'ครบกำหนดชำระดอกเบี้ย', 
+                            message: `หนี้ของ ${debtor.name} ครบรอบกำหนดชำระดอกเบี้ยประจำเดือน`,
+                            anniversaryMonth: details.anniversaryMonth
+                        });
+                        hasNewNotifications = true;
                     }
                 }
             });
-            updateNotificationBell();
-            saveData(); // Save new notifications
+
+            if (hasNewNotifications) {
+                updateNotificationBell();
+                saveData();
+            }
         };
         
         const attachEventListeners = () => {
@@ -865,4 +958,5 @@
 
 </body>
 </html>
+
 
