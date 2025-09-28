@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.12.7 (Optional Interest)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.12.8 (Statement Tab)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -103,7 +103,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.7</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.8</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -120,6 +120,7 @@
                     <button data-tab="debtors" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">👥 จัดการลูกหนี้</button>
                     <button data-tab="debts" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">💳 จัดการหนี้</button>
                     <button data-tab="payments" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">💸 ชำระหนี้</button>
+                    <button data-tab="statement" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">📈 รายการเดินบัญชี</button>
                     <button data-tab="settings" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">⚙️ ตั้งค่า</button>
                 </div>
             </nav>
@@ -153,6 +154,7 @@
                 googleSheetUrl: ''
             },
             activeTab: 'dashboard',
+            statementSelectedDebtor: null,
             syncStatus: 'idle', // idle, pending, syncing, success, error
             debtorsSearchQuery: '',
             debtsSearchQuery: ''
@@ -189,7 +191,10 @@
 
         // --- UTILITY FUNCTIONS ---
         const generateId = () => '_' + Math.random().toString(36).substr(2, 9);
-        const formatCurrency = (amount) => new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(amount || 0);
+        const formatCurrency = (amount, sign = '') => {
+            const formatted = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Math.abs(amount || 0));
+            return amount < 0 ? `-${formatted}` : `${sign}${formatted}`;
+        }
         
         const formatDateToBuddhist = (dateString) => {
             if (!dateString) return '';
@@ -252,17 +257,24 @@
         };
 
         // --- CALCULATION LOGIC ---
+        const calculateInterestUpTo = (debt, endDate) => {
+            if (!debt || !debt.date) return 0;
+            const startDate = new Date(debt.date);
+            const interestRate = Number(debt.interestRate) || 0;
+            if (interestRate === 0) return 0;
+
+            const monthsDiff = (endDate.getFullYear() - startDate.getFullYear()) * 12 + (endDate.getMonth() - startDate.getMonth());
+            return monthsDiff > 0 ? (Number(debt.amount) || 0) * (interestRate / 100) * monthsDiff : 0;
+        };
+
         const calculateDebtDetails = (debtId) => {
             const debt = state.debts.find(d => d.id === debtId);
             if (!debt) return { totalInterest: 0, totalPaid: 0, balance: 0, isOverdue: false, daysOverdue: 0, isAnniversaryToday: false };
             
-            const startDate = new Date(debt.date);
             const today = new Date();
             today.setHours(0,0,0,0);
-            
-            const interestRate = Number(debt.interestRate) || 0;
-            const monthsDiff = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
-            const totalInterest = monthsDiff > 0 ? (Number(debt.amount) || 0) * (interestRate / 100) * monthsDiff : 0;
+
+            const totalInterest = calculateInterestUpTo(debt, today);
             const totalDebt = (Number(debt.amount) || 0) + totalInterest;
             const totalPaid = state.payments.filter(p => p.debtId === debtId).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             const balance = totalDebt - totalPaid;
@@ -271,6 +283,9 @@
             let daysOverdue = 0;
             let isAnniversaryToday = false;
             let anniversaryMonth = null;
+            
+            const startDate = new Date(debt.date);
+            const interestRate = Number(debt.interestRate) || 0;
 
             if (debt.dueDate) {
                 const dueDate = new Date(debt.dueDate);
@@ -306,7 +321,7 @@
             document.querySelectorAll('#tabs-container button').forEach(button => {
                 button.classList.toggle('tab-active', button.dataset.tab === tab);
                 button.classList.toggle('tab-inactive', button.dataset.tab !== tab);
-                if (!state.settings.googleSheetUrl && button.dataset.tab !== 'settings') {
+                if (!state.settings.googleSheetUrl && !['settings'].includes(button.dataset.tab)) {
                     button.disabled = true;
                     button.classList.add('opacity-50', 'cursor-not-allowed');
                 } else {
@@ -320,6 +335,7 @@
                 debtors: renderDebtors,
                 debts: renderDebts,
                 payments: renderPayments,
+                statement: renderStatement,
                 settings: renderSettings
             };
             
@@ -340,41 +356,22 @@
                 totalInterest += details.totalInterest;
                 if (details.isOverdue) overdueDebtsCount++;
 
-                if (details.balance <= 0) return; // Skip paid debts
+                if (details.balance <= 0) return;
 
-                // Logic for fixed due dates
                 if (debt.dueDate) {
                     const daysUntilDue = getDaysDifference(debt.dueDate, new Date());
                     if (daysUntilDue >= 0 && daysUntilDue <= 30) {
-                        allUpcomingDebts.push({ 
-                            ...debt, 
-                            daysUntilDue, 
-                            balance: details.balance,
-                            isMonthly: false 
-                        });
+                        allUpcomingDebts.push({ ...debt, daysUntilDue, balance: details.balance, isMonthly: false, displayDate: debt.dueDate });
                     }
                 } 
-                // Logic for monthly interest due dates
                 else if (debt.interestRate > 0) {
                     const today = new Date();
                     const startDate = new Date(debt.date);
-                    const anniversaryDay = startDate.getDate();
-
-                    let nextAnniversary = new Date(today.getFullYear(), today.getMonth(), anniversaryDay);
-                    
-                    if (nextAnniversary < today) {
-                        nextAnniversary.setMonth(nextAnniversary.getMonth() + 1);
-                    }
-
+                    let nextAnniversary = new Date(today.getFullYear(), today.getMonth(), startDate.getDate());
+                    if (nextAnniversary < today) nextAnniversary.setMonth(nextAnniversary.getMonth() + 1);
                     const daysUntilDue = getDaysDifference(nextAnniversary, today);
-
                     if (daysUntilDue >= 0 && daysUntilDue <= 30) {
-                        allUpcomingDebts.push({
-                            ...debt,
-                            daysUntilDue,
-                            balance: details.balance,
-                            isMonthly: true
-                        });
+                        allUpcomingDebts.push({ ...debt, daysUntilDue, balance: details.balance, isMonthly: true, displayDate: nextAnniversary.toISOString() });
                     }
                 }
             });
@@ -382,7 +379,6 @@
             const totalDebtValue = totalPrincipal + totalInterest;
             const totalBalance = totalDebtValue - totalPaid;
             const paymentProgress = totalDebtValue > 0 ? (totalPaid / totalDebtValue) * 100 : 0;
-            
             const overdueAlert = overdueDebtsCount > 0 ? `<div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6 animate-pulse"><p class="font-bold">🚨 แจ้งเตือนด่วน!</p><p>มีหนี้เกินกำหนดชำระจำนวน ${overdueDebtsCount} รายการ</p></div>` : '';
             
             return `
@@ -399,7 +395,7 @@
                         <h3 class="text-lg font-semibold mb-4">🗓️ รายการหนี้ที่ใกล้ถึงกำหนดชำระ (30 วันข้างหน้า)</h3>
                         <div class="overflow-x-auto">
                             <table class="w-full text-sm text-left">
-                                <thead class="text-xs text-gray-700 uppercase bg-gray-50"><tr><th class="px-4 py-2">ลูกหนี้</th><th class="px-4 py-2">ยอดคงเหลือ</th><th class="px-4 py-2">รายละเอียด</th><th class="px-4 py-2">จะถึงกำหนดใน</th></tr></thead>
+                                <thead class="text-xs text-gray-700 uppercase bg-gray-50"><tr><th class="px-4 py-2">ลูกหนี้</th><th class="px-4 py-2">ยอดคงเหลือ</th><th class="px-4 py-2">รายละเอียด</th><th class="px-4 py-2">วันที่ครบกำหนด</th></tr></thead>
                                 <tbody>
                                     ${allUpcomingDebts.length > 0 ? allUpcomingDebts.sort((a,b) => a.daysUntilDue - b.daysUntilDue).map(debt => {
                                         const detailText = debt.isMonthly 
@@ -410,7 +406,7 @@
                                             <td class="px-4 py-2 font-medium">${state.debtors.find(d => d.id === debt.debtorId)?.name || 'N/A'}</td>
                                             <td class="px-4 py-2">${formatCurrency(debt.balance)}</td>
                                             <td class="px-4 py-2">${detailText}</td>
-                                            <td class="px-4 py-2"><span class="bg-yellow-100 text-yellow-800 text-xs font-medium mr-2 px-2.5 py-0.5 rounded">${debt.daysUntilDue} วัน</span></td>
+                                            <td class="px-4 py-2 font-medium text-gray-700">${formatDateToBuddhist(debt.displayDate)}</td>
                                         </tr>
                                     `}).join('') : '<tr><td colspan="4" class="text-center py-4 text-gray-500">ไม่มีรายการ</td></tr>'}
                                 </tbody>
@@ -526,6 +522,110 @@
                     </div>
                 </div>
              `;
+        };
+        const renderStatement = () => {
+            const debtorOptions = state.debtors.map(d => `<option value="${d.id}" ${state.statementSelectedDebtor === d.id ? 'selected' : ''}>${d.name}</option>`).join('');
+            const statementTable = state.statementSelectedDebtor ? generateStatementTable(state.statementSelectedDebtor) : '<p class="text-center text-gray-500 py-8">กรุณาเลือกลูกหนี้เพื่อดูรายการ</p>';
+
+            return `
+                <div class="card bg-white p-6 rounded-lg shadow">
+                    <div class="flex flex-col md:flex-row justify-between md:items-center mb-4 border-b pb-4">
+                        <h3 class="text-xl font-semibold">📈 รายการเดินบัญชี</h3>
+                        <div class="mt-4 md:mt-0">
+                            <label for="statement-debtor-select" class="mr-2 font-medium">เลือกลูกหนี้:</label>
+                            <select id="statement-debtor-select" class="form-input rounded-md border-gray-300 shadow-sm">
+                                <option value="">-- ทั้งหมด --</option>
+                                ${debtorOptions}
+                            </select>
+                        </div>
+                    </div>
+                    <div id="statement-table-container" class="overflow-x-auto">
+                        ${statementTable}
+                    </div>
+                </div>
+            `;
+        };
+
+        const generateStatementTable = (debtorId) => {
+            const debtor = state.debtors.find(d => d.id === debtorId);
+            if (!debtor) return '<p>ไม่พบข้อมูลลูกหนี้</p>';
+
+            const debtorDebts = state.debts.filter(d => d.debtorId === debtorId);
+            const debtorPayments = state.payments.filter(p => p.debtorId === debtorId);
+            
+            let transactions = [
+                ...debtorDebts.map(d => ({ ...d, type: 'debt', txDate: d.date })),
+                ...debtorPayments.map(p => ({ ...p, type: 'payment', txDate: p.date }))
+            ];
+            transactions.sort((a, b) => new Date(a.txDate) - new Date(b.txDate));
+
+            let runningBalance = 0;
+            let interestPaidTracker = {}; // { debtId: amount }
+
+            const tableRowsHtml = transactions.map(tx => {
+                let rowHtml = '';
+                if (tx.type === 'debt') {
+                    const principalAmount = Number(tx.amount);
+                    runningBalance += principalAmount;
+                    interestPaidTracker[tx.id] = 0;
+
+                    return `
+                        <tr class="border-b">
+                            <td class="p-3">${formatDateToBuddhist(tx.txDate)}</td>
+                            <td class="p-3">เงินกู้ - ${tx.type}</td>
+                            <td class="p-3 text-blue-600 font-medium">${formatCurrency(principalAmount, '+')}</td>
+                            <td class="p-3 text-center">-</td>
+                            <td class="p-3 text-blue-600 font-semibold">${formatCurrency(principalAmount, '+')}</td>
+                            <td class="p-3 font-semibold">${formatCurrency(runningBalance)}</td>
+                        </tr>
+                    `;
+                } else if (tx.type === 'payment') {
+                    const debt = state.debts.find(d => d.id === tx.debtId);
+                    if (!debt) return '';
+
+                    const interestAccruedTotal = calculateInterestUpTo(debt, new Date(tx.txDate));
+                    const interestAlreadyPaid = interestPaidTracker[tx.debtId] || 0;
+                    const interestDueForThisPayment = interestAccruedTotal - interestAlreadyPaid;
+
+                    const paymentAmount = Number(tx.amount);
+                    const paidToInterest = Math.min(paymentAmount, Math.max(0, interestDueForThisPayment));
+                    const paidToPrincipal = paymentAmount - paidToInterest;
+
+                    interestPaidTracker[tx.debtId] += paidToInterest;
+                    runningBalance -= paymentAmount;
+
+                    return `
+                       <tr class="border-b bg-green-50">
+                            <td class="p-3">${formatDateToBuddhist(tx.txDate)}</td>
+                            <td class="p-3">ชำระเงิน - ${tx.method}</td>
+                            <td class="p-3 text-green-700">${paidToPrincipal > 0 ? formatCurrency(-paidToPrincipal) : '-'}</td>
+                            <td class="p-3 text-red-600">${paidToInterest > 0 ? formatCurrency(-paidToInterest) : '-'}</td>
+                            <td class="p-3 text-green-700 font-semibold">${formatCurrency(-paymentAmount)}</td>
+                            <td class="p-3 font-semibold">${formatCurrency(runningBalance)}</td>
+                        </tr>
+                    `;
+                }
+                return '';
+            }).join('');
+
+            return `
+                <h4 class="text-lg font-bold mb-2">Statement ของ: ${debtor.name}</h4>
+                <table class="w-full text-sm text-left">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                        <tr>
+                            <th class="p-3">วันที่</th>
+                            <th class="p-3">รายการ</th>
+                            <th class="p-3">เงินต้น</th>
+                            <th class="p-3">ดอกเบี้ย</th>
+                            <th class="p-3">ยอดรวม</th>
+                            <th class="p-3">คงเหลือสุทธิ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableRowsHtml || `<tr><td colspan="6" class="text-center p-4">ไม่มีรายการ</td></tr>`}
+                    </tbody>
+                </table>
+            `;
         };
         const renderSettings = () => {
              const welcomeMessage = !state.settings.googleSheetUrl ? `
@@ -991,6 +1091,11 @@
                 document.getElementById('payment-form')?.addEventListener('submit', handlePaymentFormSubmit);
                 document.getElementById('payment-debtor-id')?.addEventListener('change', (e) => updateDebtsForPaymentForm(e.target.value));
                 document.getElementById('payment-evidence-file')?.addEventListener('change', e => document.getElementById('payment-evidence-name').textContent = e.target.files[0]?.name || 'คลิกเพื่อเลือกไฟล์');
+            } else if (activeTab === 'statement') {
+                document.getElementById('statement-debtor-select')?.addEventListener('change', e => {
+                    state.statementSelectedDebtor = e.target.value;
+                    render();
+                });
             } else if (activeTab === 'settings') {
                 document.getElementById('save-settings-btn')?.addEventListener('click', handleSaveSettings);
                 document.getElementById('save-to-sheets-manual')?.addEventListener('click', () => saveDataToSheets(true));
