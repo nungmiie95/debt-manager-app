@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.12.8 (Statement Tab)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.12.11 (Full CRUD & Notes)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -103,7 +103,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.8</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.11</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -154,7 +154,7 @@
                 googleSheetUrl: ''
             },
             activeTab: 'dashboard',
-            statementSelectedDebtor: null,
+            statementSelectedDebtor: "", // Empty string for "All"
             syncStatus: 'idle', // idle, pending, syncing, success, error
             debtorsSearchQuery: '',
             debtsSearchQuery: ''
@@ -196,15 +196,13 @@
             return amount < 0 ? `-${formatted}` : `${sign}${formatted}`;
         }
         
-        const formatDateToBuddhist = (dateString) => {
+        const formatDateToBuddhist = (dateString, options = {}) => {
             if (!dateString) return '';
+            const { year = 'numeric', month = 'long', day = 'numeric' } = options;
             try {
                 const date = new Date(dateString);
                 return date.toLocaleDateString('th-TH', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric',
-                    calendar: 'buddhist'
+                    year, month, day, calendar: 'buddhist'
                 });
             } catch (e) {
                 console.error("Invalid date for formatting:", dateString);
@@ -503,21 +501,39 @@
              return `
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div class="lg:col-span-1 card bg-white p-6 rounded-lg shadow">
-                        <h3 class="text-lg font-semibold mb-4">💸 บันทึกการชำระหนี้</h3>
+                        <h3 class="text-lg font-semibold mb-4" id="payment-form-title">💸 บันทึกการชำระหนี้</h3>
                         <form id="payment-form" class="space-y-4">
+                            <input type="hidden" id="payment-id">
                             <div><label for="payment-debtor-id" class="block text-sm font-medium text-gray-700">เลือกลูกหนี้*</label><select id="payment-debtor-id" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required><option value="">-- เลือกลูกหนี้ --</option>${debtorOptions}</select></div>
                             <div><label for="payment-debt-id" class="block text-sm font-medium text-gray-700">เลือกรายการหนี้*</label><select id="payment-debt-id" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required disabled><option value="">-- กรุณาเลือกลูกหนี้ก่อน --</option></select></div>
                             <div class="grid grid-cols-2 gap-4"><div><label for="payment-amount" class="block text-sm font-medium text-gray-700">จำนวนเงิน*</label><input type="number" id="payment-amount" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="payment-date" class="block text-sm font-medium text-gray-700">วันที่ชำระ*</label><input type="date" id="payment-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div></div>
                             <div><label for="payment-method" class="block text-sm font-medium text-gray-700">วิธีการชำระ</label><select id="payment-method" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"><option>โอนเงิน</option><option>เงินสด</option><option>เช็ค</option><option>อื่นๆ</option></select></div>
                              <div><label for="payment-evidence-file" class="block text-sm font-medium text-gray-700">หลักฐานการชำระ (สลิป)</label><label for="payment-evidence-file" class="file-input-label mt-1 flex justify-center px-6 pt-5 pb-6 rounded-md"><div class="space-y-1 text-center"><svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="text-sm text-gray-600" id="payment-evidence-name">คลิกเพื่อเลือกไฟล์</p></div></label><input type="file" id="payment-evidence-file" class="hidden" accept="image/*,.pdf"></div>
                             <div><label for="payment-note" class="block text-sm font-medium text-gray-700">หมายเหตุ</label><textarea id="payment-note" rows="2" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"></textarea></div>
-                            <button type="submit" class="w-full btn-primary text-white font-bold py-2 px-4 rounded-md">บันทึกการชำระ</button>
+                            <div class="flex items-center space-x-2">
+                                <button type="submit" id="payment-submit-btn" class="w-full btn-primary text-white font-bold py-2 px-4 rounded-md">บันทึกการชำระ</button>
+                                <button type="button" id="cancel-edit-payment" class="w-full bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-md hidden">ยกเลิก</button>
+                            </div>
                         </form>
                     </div>
                     <div class="lg:col-span-2 card bg-white p-6 rounded-lg shadow">
                          <h3 class="text-lg font-semibold mb-4">📜 ประวัติการชำระหนี้ทั้งหมด</h3>
                          <div class="relative pl-4 border-l-2 border-gray-200 max-h-[60vh] overflow-y-auto pr-2">
-                             ${state.payments.length > 0 ? [...state.payments].reverse().map(p => { const debtor = state.debtors.find(d => d.id === p.debtorId); return `<div class="mb-6 relative timeline-item"><div class="font-semibold">${debtor?.name || 'N/A'}</div><time class="text-sm font-normal leading-none text-gray-400">${formatDateToBuddhist(p.date)}</time><p class="text-base font-normal text-gray-600">ชำระเงินจำนวน <span class="font-bold text-green-600">${formatCurrency(p.amount)}</span> ผ่าน ${p.method}.</p>${p.note ? `<p class="text-sm text-gray-500 bg-gray-100 p-2 rounded-md mt-1">หมายเหตุ: ${p.note}</p>` : ''}${p.evidence ? `<button data-id="${p.id}" data-type="payment" class="view-evidence-btn text-sm text-blue-600 hover:underline mt-1">📎 ดูหลักฐาน</button>` : ''}</div>` }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีประวัติการชำระเงิน</p>'}
+                             ${state.payments.length > 0 ? [...state.payments].reverse().map(p => { 
+                                 const debtor = state.debtors.find(d => d.id === p.debtorId); 
+                                 return `
+                                    <div class="mb-6 relative timeline-item">
+                                        <div class="font-semibold">${debtor?.name || 'N/A'}</div>
+                                        <time class="text-sm font-normal leading-none text-gray-400">${formatDateToBuddhist(p.date)}</time>
+                                        <p class="text-base font-normal text-gray-600">ชำระเงินจำนวน <span class="font-bold text-green-600">${formatCurrency(p.amount)}</span> ผ่าน ${p.method}.</p>
+                                        ${p.note ? `<p class="text-sm text-gray-500 bg-gray-100 p-2 rounded-md mt-1">หมายเหตุ: ${p.note}</p>` : ''}
+                                        <div class="mt-2 flex items-center space-x-2">
+                                            ${p.evidence ? `<button data-id="${p.id}" data-type="payment" class="view-evidence-btn text-sm text-blue-600 hover:underline">📎 ดูหลักฐาน</button>` : ''}
+                                            <button data-id="${p.id}" class="edit-payment-btn text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200">✏️ แก้ไข</button>
+                                            <button data-id="${p.id}" class="delete-payment-btn text-xs bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200">🗑️ ลบ</button>
+                                        </div>
+                                    </div>` 
+                                }).join('') : '<p class="text-center text-gray-500 py-8">ยังไม่มีประวัติการชำระเงิน</p>'}
                          </div>
                     </div>
                 </div>
@@ -525,16 +541,16 @@
         };
         const renderStatement = () => {
             const debtorOptions = state.debtors.map(d => `<option value="${d.id}" ${state.statementSelectedDebtor === d.id ? 'selected' : ''}>${d.name}</option>`).join('');
-            const statementTable = state.statementSelectedDebtor ? generateStatementTable(state.statementSelectedDebtor) : '<p class="text-center text-gray-500 py-8">กรุณาเลือกลูกหนี้เพื่อดูรายการ</p>';
+            const statementTable = state.statementSelectedDebtor ? generateDebtorStatementTable(state.statementSelectedDebtor) : generateGlobalStatementTable();
 
             return `
                 <div class="card bg-white p-6 rounded-lg shadow">
                     <div class="flex flex-col md:flex-row justify-between md:items-center mb-4 border-b pb-4">
                         <h3 class="text-xl font-semibold">📈 รายการเดินบัญชี</h3>
                         <div class="mt-4 md:mt-0">
-                            <label for="statement-debtor-select" class="mr-2 font-medium">เลือกลูกหนี้:</label>
+                            <label for="statement-debtor-select" class="mr-2 font-medium">แสดง:</label>
                             <select id="statement-debtor-select" class="form-input rounded-md border-gray-300 shadow-sm">
-                                <option value="">-- ทั้งหมด --</option>
+                                <option value="">-- ภาพรวมทั้งหมด --</option>
                                 ${debtorOptions}
                             </select>
                         </div>
@@ -546,7 +562,81 @@
             `;
         };
 
-        const generateStatementTable = (debtorId) => {
+        const generateGlobalStatementTable = () => {
+            const allDebtsAsTx = state.debts.map(d => ({ ...d, type: 'debt', txDate: d.date }));
+            const allPaymentsAsTx = state.payments.map(p => ({ ...p, type: 'payment', txDate: p.date }));
+            let transactions = [...allDebtsAsTx, ...allPaymentsAsTx];
+            transactions.sort((a, b) => new Date(a.txDate) - new Date(b.txDate));
+
+            let runningBalance = 0;
+            let totalIncome = 0;
+            let totalExpense = 0;
+
+            const tableRowsHtml = transactions.map(tx => {
+                const debtor = state.debtors.find(d => d.id === tx.debtorId);
+                const debtorName = debtor ? debtor.name : 'N/A';
+                let incomeHtml = '<span class="text-gray-400">-</span>';
+                let expenseHtml = '<span class="text-gray-400">-</span>';
+                
+                if (tx.type === 'debt') {
+                    const expenseAmount = Number(tx.amount);
+                    runningBalance -= expenseAmount;
+                    totalExpense += expenseAmount;
+                    expenseHtml = `<span class="text-red-600 font-medium">${formatCurrency(-expenseAmount)}</span>`;
+                } else if (tx.type === 'payment') {
+                    const incomeAmount = Number(tx.amount);
+                    runningBalance += incomeAmount;
+                    totalIncome += incomeAmount;
+                    incomeHtml = `<span class="text-green-600 font-medium">${formatCurrency(incomeAmount, '+')}</span>`;
+                }
+
+                const description = tx.type === 'debt' ? `ให้กู้แก่ ${debtorName}` : `รับชำระจาก ${debtorName}`;
+                const note = tx.note || tx.description || '-';
+
+                return `
+                    <tr class="border-b">
+                        <td class="p-3">${formatDateToBuddhist(tx.txDate)}</td>
+                        <td class="p-3">${description}</td>
+                        <td class="p-3 text-right">${incomeHtml}</td>
+                        <td class="p-3 text-right">${expenseHtml}</td>
+                        <td class="p-3 text-right font-semibold">${formatCurrency(runningBalance)}</td>
+                        <td class="p-3 text-xs text-gray-500">${note}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            const netTotal = totalIncome - totalExpense;
+            const netTotalClass = netTotal >= 0 ? 'text-green-600' : 'text-red-600';
+
+            return `
+                <h4 class="text-lg font-bold mb-2">ภาพรวมบัญชีทั้งหมด</h4>
+                <table class="w-full text-sm text-left">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                        <tr>
+                            <th class="p-3">วันที่</th>
+                            <th class="p-3">รายการ</th>
+                            <th class="p-3 text-right">รายรับ</th>
+                            <th class="p-3 text-right">รายจ่าย</th>
+                            <th class="p-3 text-right">คงเหลือ</th>
+                            <th class="p-3">หมายเหตุ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableRowsHtml || `<tr><td colspan="6" class="text-center p-4">ไม่มีรายการ</td></tr>`}
+                    </tbody>
+                    <tfoot class="bg-gray-200 font-bold">
+                        <tr>
+                            <td colspan="2" class="p-3 text-right">ยอดรวม:</td>
+                            <td class="p-3 text-right text-green-600">${formatCurrency(totalIncome)}</td>
+                            <td class="p-3 text-right text-red-600">${formatCurrency(-totalExpense)}</td>
+                            <td class="p-3 text-right ${netTotalClass}" colspan="2">${formatCurrency(netTotal)}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            `;
+        };
+        
+        const generateDebtorStatementTable = (debtorId) => {
             const debtor = state.debtors.find(d => d.id === debtorId);
             if (!debtor) return '<p>ไม่พบข้อมูลลูกหนี้</p>';
 
@@ -560,15 +650,13 @@
             transactions.sort((a, b) => new Date(a.txDate) - new Date(b.txDate));
 
             let runningBalance = 0;
-            let interestPaidTracker = {}; // { debtId: amount }
+            let interestPaidTracker = {};
 
             const tableRowsHtml = transactions.map(tx => {
-                let rowHtml = '';
                 if (tx.type === 'debt') {
                     const principalAmount = Number(tx.amount);
                     runningBalance += principalAmount;
                     interestPaidTracker[tx.id] = 0;
-
                     return `
                         <tr class="border-b">
                             <td class="p-3">${formatDateToBuddhist(tx.txDate)}</td>
@@ -577,8 +665,8 @@
                             <td class="p-3 text-center">-</td>
                             <td class="p-3 text-blue-600 font-semibold">${formatCurrency(principalAmount, '+')}</td>
                             <td class="p-3 font-semibold">${formatCurrency(runningBalance)}</td>
-                        </tr>
-                    `;
+                            <td class="p-3 text-xs text-gray-500">${tx.description || '-'}</td>
+                        </tr>`;
                 } else if (tx.type === 'payment') {
                     const debt = state.debts.find(d => d.id === tx.debtId);
                     if (!debt) return '';
@@ -593,7 +681,6 @@
 
                     interestPaidTracker[tx.debtId] += paidToInterest;
                     runningBalance -= paymentAmount;
-
                     return `
                        <tr class="border-b bg-green-50">
                             <td class="p-3">${formatDateToBuddhist(tx.txDate)}</td>
@@ -602,8 +689,8 @@
                             <td class="p-3 text-red-600">${paidToInterest > 0 ? formatCurrency(-paidToInterest) : '-'}</td>
                             <td class="p-3 text-green-700 font-semibold">${formatCurrency(-paymentAmount)}</td>
                             <td class="p-3 font-semibold">${formatCurrency(runningBalance)}</td>
-                        </tr>
-                    `;
+                            <td class="p-3 text-xs text-gray-500">${tx.note || '-'}</td>
+                        </tr>`;
                 }
                 return '';
             }).join('');
@@ -619,13 +706,13 @@
                             <th class="p-3">ดอกเบี้ย</th>
                             <th class="p-3">ยอดรวม</th>
                             <th class="p-3">คงเหลือสุทธิ</th>
+                            <th class="p-3">หมายเหตุ</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${tableRowsHtml || `<tr><td colspan="6" class="text-center p-4">ไม่มีรายการ</td></tr>`}
+                        ${tableRowsHtml || `<tr><td colspan="7" class="text-center p-4">ไม่มีรายการ</td></tr>`}
                     </tbody>
-                </table>
-            `;
+                </table>`;
         };
         const renderSettings = () => {
              const welcomeMessage = !state.settings.googleSheetUrl ? `
@@ -849,22 +936,48 @@
         
         const handlePaymentFormSubmit = async (e) => {
             e.preventDefault();
-            const form = e.target, submitBtn = form.querySelector('button[type="submit"]');
+            const form = e.target, id = form.querySelector('#payment-id').value, submitBtn = form.querySelector('#payment-submit-btn');
             submitBtn.disabled = true; submitBtn.textContent = 'กำลังบันทึก...';
             try {
                 const fileInput = form.querySelector('#payment-evidence-file');
-                let evidenceUrl = '';
-                if (fileInput.files[0]) { submitBtn.textContent = 'กำลังอัปโหลดไฟล์...'; evidenceUrl = await uploadFileToDrive(fileInput.files[0]); }
+                let evidenceUrl = id ? state.payments.find(p => p.id === id)?.evidence : '';
+                if (fileInput.files[0]) { 
+                    submitBtn.textContent = 'กำลังอัปโหลดไฟล์...'; 
+                    evidenceUrl = await uploadFileToDrive(fileInput.files[0]); 
+                }
+                
                 const paymentData = {
-                    id: generateId(), debtorId: form.querySelector('#payment-debtor-id').value, debtId: form.querySelector('#payment-debt-id').value, amount: parseFloat(form.querySelector('#payment-amount').value),
-                    date: form.querySelector('#payment-date').value, method: form.querySelector('#payment-method').value, note: form.querySelector('#payment-note').value.trim(), createdAt: new Date().toISOString(), evidence: evidenceUrl
+                    id: id || generateId(), 
+                    debtorId: form.querySelector('#payment-debtor-id').value, 
+                    debtId: form.querySelector('#payment-debt-id').value, 
+                    amount: parseFloat(form.querySelector('#payment-amount').value),
+                    date: form.querySelector('#payment-date').value, 
+                    method: form.querySelector('#payment-method').value, 
+                    note: form.querySelector('#payment-note').value.trim(), 
+                    createdAt: id ? state.payments.find(p => p.id === id).createdAt : new Date().toISOString(), 
+                    evidence: evidenceUrl
                 };
+
                 if (!paymentData.debtorId || !paymentData.debtId || !paymentData.amount || !paymentData.date) { throw new Error('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน'); }
-                state.payments.push(paymentData);
-                createNotification({ type: 'payment', title: 'ได้รับการชำระหนี้', message: `ลูกหนี้ ${state.debtors.find(d=>d.id===paymentData.debtorId)?.name} ชำระเงิน ${formatCurrency(paymentData.amount)}` });
-                showAlert('บันทึกการชำระเงินสำเร็จ'); saveData(); render();
-            } catch (error) { showAlert(error.message, 'error'); }
-            finally { submitBtn.disabled = false; submitBtn.textContent = 'บันทึกการชำระ'; }
+
+                if (id) {
+                    const index = state.payments.findIndex(p => p.id === id);
+                    if (index > -1) state.payments[index] = paymentData;
+                    showAlert('อัปเดตการชำระเงินสำเร็จ');
+                } else {
+                    state.payments.push(paymentData);
+                    createNotification({ type: 'payment', title: 'ได้รับการชำระหนี้', message: `ลูกหนี้ ${state.debtors.find(d=>d.id===paymentData.debtorId)?.name} ชำระเงิน ${formatCurrency(paymentData.amount)}` });
+                    showAlert('บันทึกการชำระเงินสำเร็จ');
+                }
+                saveData(); 
+                render();
+            } catch (error) { 
+                showAlert(error.message, 'error'); 
+            }
+            finally { 
+                submitBtn.disabled = false;
+                // The text will be reset by render()
+            }
         };
 
         const handleSaveSettings = () => {
@@ -912,6 +1025,28 @@
             document.getElementById('debt-evidence-name').textContent = debt.evidence ? 'มีไฟล์แนบอยู่แล้ว (หากเลือกใหม่จะทับไฟล์เดิม)' : 'คลิกเพื่อเลือกไฟล์';
             document.getElementById('debt-form').scrollIntoView({ behavior: 'smooth' });
         };
+        const handleEditPaymentClick = (id) => {
+            const payment = state.payments.find(p => p.id === id);
+            if (!payment) return;
+
+            const form = document.getElementById('payment-form');
+            form.querySelector('#payment-id').value = payment.id;
+            form.querySelector('#payment-debtor-id').value = payment.debtorId;
+            
+            updateDebtsForPaymentForm(payment.debtorId, payment.debtId);
+            
+            form.querySelector('#payment-amount').value = payment.amount;
+            form.querySelector('#payment-date').value = payment.date ? new Date(payment.date).toISOString().substring(0, 10) : '';
+            form.querySelector('#payment-method').value = payment.method;
+            form.querySelector('#payment-note').value = payment.note || '';
+            
+            form.querySelector('#payment-evidence-name').textContent = payment.evidence ? 'มีไฟล์แนบอยู่แล้ว (หากเลือกใหม่จะทับไฟล์เดิม)' : 'คลิกเพื่อเลือกไฟล์';
+            
+            document.getElementById('payment-form-title').textContent = '💸 แก้ไขการชำระหนี้';
+            document.getElementById('payment-submit-btn').textContent = 'บันทึกการแก้ไข';
+            document.getElementById('cancel-edit-payment').classList.remove('hidden');
+            form.scrollIntoView({ behavior: 'smooth' });
+        };
         const handleDeleteDebtorClick = (id) => {
             showConfirmationModal('ยืนยันการลบ', 'คุณแน่ใจหรือไม่ว่าต้องการลบลูกหนี้คนนี้? ข้อมูลหนี้และการชำระทั้งหมดจะถูกลบไปด้วย', () => {
                 state.debtors = state.debtors.filter(d => d.id !== id);
@@ -925,6 +1060,14 @@
                 state.debts = state.debts.filter(d => d.id !== id);
                 state.payments = state.payments.filter(p => p.debtId !== id);
                 saveData(); render(); showAlert('ลบข้อมูลหนี้สำเร็จ');
+            });
+        };
+        const handleDeletePaymentClick = (id) => {
+            showConfirmationModal('ยืนยันการลบ', 'คุณแน่ใจหรือไม่ว่าต้องการลบรายการชำระเงินนี้?', () => {
+                state.payments = state.payments.filter(p => p.id !== id);
+                saveData(); 
+                render(); 
+                showAlert('ลบข้อมูลการชำระเงินสำเร็จ');
             });
         };
         const updateNotificationBell = () => {
@@ -997,7 +1140,7 @@
             updateNotificationBell();
             refreshNotificationPanel();
         };
-        const updateDebtsForPaymentForm = (debtorId) => {
+        const updateDebtsForPaymentForm = (debtorId, selectedDebtId = null) => {
             const debtSelectEl = document.getElementById('payment-debt-id');
             if (!debtSelectEl) return;
             if (!debtorId) {
@@ -1005,14 +1148,20 @@
                 debtSelectEl.disabled = true;
                 return;
             }
-            const outstandingDebts = state.debts.filter(d => d.debtorId === debtorId && calculateDebtDetails(d.id).balance > 0);
-            if (outstandingDebts.length > 0) {
+            // Include debts that might have been fully paid if we are editing a payment for it
+            const relevantDebts = selectedDebtId 
+                ? state.debts.filter(d => d.debtorId === debtorId) 
+                : state.debts.filter(d => d.debtorId === debtorId && calculateDebtDetails(d.id).balance > 0);
+            
+            if (relevantDebts.length > 0) {
                 debtSelectEl.innerHTML = '<option value="">-- เลือกรายการหนี้ --</option>';
-                outstandingDebts.forEach(debt => {
+                relevantDebts.forEach(debt => {
                     const balance = calculateDebtDetails(debt.id).balance;
-                    debtSelectEl.innerHTML += `<option value="${debt.id}">${debt.type} - คงเหลือ ${formatCurrency(balance)}</option>`;
+                    const isSelected = debt.id === selectedDebtId ? 'selected' : '';
+                    debtSelectEl.innerHTML += `<option value="${debt.id}" ${isSelected}>${debt.type} (กู้ ${formatDateToBuddhist(debt.date, { day: '2-digit', month: 'short', year: '2-digit' })}) - คงเหลือ ${formatCurrency(balance)}</option>`;
                 });
                 debtSelectEl.disabled = false;
+                if(selectedDebtId) debtSelectEl.value = selectedDebtId;
             } else {
                 debtSelectEl.innerHTML = '<option value="">-- ไม่มีหนี้คงค้าง --</option>';
                 debtSelectEl.disabled = true;
@@ -1089,8 +1238,19 @@
                 document.getElementById('debt-evidence-file')?.addEventListener('change', e => document.getElementById('debt-evidence-name').textContent = e.target.files[0]?.name || 'คลิกเพื่อเลือกไฟล์');
             } else if (activeTab === 'payments') {
                 document.getElementById('payment-form')?.addEventListener('submit', handlePaymentFormSubmit);
+                document.querySelectorAll('.edit-payment-btn').forEach(btn => btn.addEventListener('click', (e) => handleEditPaymentClick(e.currentTarget.dataset.id)));
+                document.querySelectorAll('.delete-payment-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeletePaymentClick(e.currentTarget.dataset.id)));
                 document.getElementById('payment-debtor-id')?.addEventListener('change', (e) => updateDebtsForPaymentForm(e.target.value));
                 document.getElementById('payment-evidence-file')?.addEventListener('change', e => document.getElementById('payment-evidence-name').textContent = e.target.files[0]?.name || 'คลิกเพื่อเลือกไฟล์');
+                document.getElementById('cancel-edit-payment')?.addEventListener('click', () => { 
+                    const form = document.getElementById('payment-form');
+                    form.reset(); 
+                    form.querySelector('#payment-id').value = '';
+                    document.getElementById('payment-form-title').textContent = '💸 บันทึกการชำระหนี้';
+                    document.getElementById('payment-submit-btn').textContent = 'บันทึกการชำระ';
+                    document.getElementById('cancel-edit-payment').classList.add('hidden');
+                    updateDebtsForPaymentForm(null);
+                });
             } else if (activeTab === 'statement') {
                 document.getElementById('statement-debtor-select')?.addEventListener('change', e => {
                     state.statementSelectedDebtor = e.target.value;
@@ -1107,6 +1267,7 @@
             if (savedState) {
                 const parsed = JSON.parse(savedState);
                 state.settings = parsed.settings || state.settings;
+                state.statementSelectedDebtor = parsed.statementSelectedDebtor === undefined ? "" : parsed.statementSelectedDebtor;
             }
 
             if (state.settings.googleSheetUrl) {
