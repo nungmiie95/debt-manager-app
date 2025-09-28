@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.12.11 (Full CRUD & Notes)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.13 (Compound Interest)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -103,7 +103,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.12.11</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.13</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -116,11 +116,10 @@
             <!-- Tabs Navigation -->
             <nav id="tabs-container" class="bg-white/10">
                 <div class="container mx-auto px-4 flex space-x-2 overflow-x-auto">
-                    <button data-tab="dashboard" class="py-3 px-4 font-semibold whitespace-nowrap tab-active">📊 แดชบอร์ด</button>
+                    <button data-tab="dashboard" class="py-3 px-4 font-semibold whitespace-nowrap tab-active">📊 แดชบอร์ด & บัญชี</button>
                     <button data-tab="debtors" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">👥 จัดการลูกหนี้</button>
                     <button data-tab="debts" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">💳 จัดการหนี้</button>
                     <button data-tab="payments" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">💸 ชำระหนี้</button>
-                    <button data-tab="statement" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">📈 รายการเดินบัญชี</button>
                     <button data-tab="settings" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">⚙️ ตั้งค่า</button>
                 </div>
             </nav>
@@ -159,12 +158,17 @@
             debtorsSearchQuery: '',
             debtsSearchQuery: ''
         };
+        
+        // --- CACHING ---
+        let calculationCache = new Map();
+
 
         // --- DEBOUNCER for auto-saving ---
         let saveTimeout;
         const debounceSave = () => {
             clearTimeout(saveTimeout);
             updateSyncStatus('pending');
+            calculationCache.clear(); // Clear cache on data change
             saveTimeout = setTimeout(() => {
                 saveDataToSheets(false); // auto-save doesn't show success alert
             }, 2500);
@@ -254,16 +258,53 @@
             document.getElementById('modal-confirm').addEventListener('click', () => { onConfirm(); modal.remove(); });
         };
 
-        // --- CALCULATION LOGIC ---
-        const calculateInterestUpTo = (debt, endDate) => {
-            if (!debt || !debt.date) return 0;
-            const startDate = new Date(debt.date);
-            const interestRate = Number(debt.interestRate) || 0;
-            if (interestRate === 0) return 0;
+        // --- CORE CALCULATION ENGINE ---
+        const generateStatementDataForDebt = (debtId, upToDate) => {
+            const debt = state.debts.find(d => d.id === debtId);
+            if (!debt) return null;
 
-            const monthsDiff = (endDate.getFullYear() - startDate.getFullYear()) * 12 + (endDate.getMonth() - startDate.getMonth());
-            return monthsDiff > 0 ? (Number(debt.amount) || 0) * (interestRate / 100) * monthsDiff : 0;
+            const cacheKey = `${debtId}-${upToDate.toISOString()}`;
+            if (calculationCache.has(cacheKey)) return calculationCache.get(cacheKey);
+
+            const payments = state.payments.filter(p => p.debtId === debtId).sort((a, b) => new Date(a.date) - new Date(b.date));
+            
+            let runningPrincipal = Number(debt.amount);
+            let totalInterestAccrued = 0;
+            let totalPaid = 0;
+            let lastDate = new Date(debt.date);
+
+            const processPeriod = (periodEndDate) => {
+                const monthsDiff = (periodEndDate.getFullYear() - lastDate.getFullYear()) * 12 + (periodEndDate.getMonth() - lastDate.getMonth());
+                if (monthsDiff > 0) {
+                    const interestRate = Number(debt.interestRate || 0) / 100;
+                    const principalForInterestCalc = debt.interestType === 'compound' ? runningPrincipal : Number(debt.amount);
+                    const interestForPeriod = principalForInterestCalc * interestRate * monthsDiff;
+                    
+                    totalInterestAccrued += interestForPeriod;
+                    if (debt.interestType === 'compound') {
+                        runningPrincipal += interestForPeriod;
+                    }
+                }
+                lastDate = periodEndDate;
+            };
+
+            payments.forEach(payment => {
+                const paymentDate = new Date(payment.date);
+                processPeriod(paymentDate);
+                runningPrincipal -= Number(payment.amount);
+                totalPaid += Number(payment.amount);
+            });
+
+            processPeriod(upToDate);
+            
+            const totalDebt = (debt.interestType === 'compound' ? runningPrincipal : Number(debt.amount)) + totalInterestAccrued;
+            const balance = totalDebt - totalPaid;
+            
+            const result = { totalInterest: totalInterestAccrued, totalPaid, balance, totalDebt };
+            calculationCache.set(cacheKey, result);
+            return result;
         };
+
 
         const calculateDebtDetails = (debtId) => {
             const debt = state.debts.find(d => d.id === debtId);
@@ -271,24 +312,17 @@
             
             const today = new Date();
             today.setHours(0,0,0,0);
-
-            const totalInterest = calculateInterestUpTo(debt, today);
-            const totalDebt = (Number(debt.amount) || 0) + totalInterest;
-            const totalPaid = state.payments.filter(p => p.debtId === debtId).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-            const balance = totalDebt - totalPaid;
-
-            let isOverdue = false;
-            let daysOverdue = 0;
-            let isAnniversaryToday = false;
-            let anniversaryMonth = null;
             
+            const details = generateStatementDataForDebt(debtId, today);
+            
+            let isOverdue = false, daysOverdue = 0, isAnniversaryToday = false, anniversaryMonth = null;
             const startDate = new Date(debt.date);
             const interestRate = Number(debt.interestRate) || 0;
 
             if (debt.dueDate) {
                 const dueDate = new Date(debt.dueDate);
                 dueDate.setHours(0, 0, 0, 0);
-                if (dueDate < today && balance > 0) {
+                if (dueDate < today && details.balance > 0) {
                     isOverdue = true;
                     daysOverdue = getDaysDifference(today, dueDate);
                 }
@@ -299,8 +333,9 @@
                 }
             }
             
-            return { totalInterest, totalPaid, balance, totalDebt, isOverdue, daysOverdue, isAnniversaryToday, anniversaryMonth };
+            return { ...details, isOverdue, daysOverdue, isAnniversaryToday, anniversaryMonth };
         };
+
 
         const getDebtorSummary = (debtorId) => ({
             totalBalance: state.debts
@@ -333,7 +368,6 @@
                 debtors: renderDebtors,
                 debts: renderDebts,
                 payments: renderPayments,
-                statement: renderStatement,
                 settings: renderSettings
             };
             
@@ -345,13 +379,17 @@
         
         const renderDashboard = () => {
             let totalPrincipal = state.debts.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
-            let totalPaid = state.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-            let totalInterest = 0, overdueDebtsCount = 0;
+            let totalPaid = 0;
+            let totalInterest = 0;
+            let overdueDebtsCount = 0;
             let allUpcomingDebts = [];
-            
+            let totalBalance = 0;
+
             state.debts.forEach(debt => {
                 const details = calculateDebtDetails(debt.id);
                 totalInterest += details.totalInterest;
+                totalPaid += details.totalPaid;
+                totalBalance += details.balance;
                 if (details.isOverdue) overdueDebtsCount++;
 
                 if (details.balance <= 0) return;
@@ -375,10 +413,11 @@
             });
 
             const totalDebtValue = totalPrincipal + totalInterest;
-            const totalBalance = totalDebtValue - totalPaid;
             const paymentProgress = totalDebtValue > 0 ? (totalPaid / totalDebtValue) * 100 : 0;
             const overdueAlert = overdueDebtsCount > 0 ? `<div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6 animate-pulse"><p class="font-bold">🚨 แจ้งเตือนด่วน!</p><p>มีหนี้เกินกำหนดชำระจำนวน ${overdueDebtsCount} รายการ</p></div>` : '';
             
+            const statementSection = renderStatementSection();
+
             return `
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
                     <div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500">👥 จำนวนลูกหนี้</h3><p class="text-2xl font-bold">${state.debtors.length} คน</p></div>
@@ -388,7 +427,7 @@
                     <div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500 text-red-600">❗ หนี้คงค้าง</h3><p class="text-2xl font-bold text-red-600">${formatCurrency(totalBalance)}</p></div>
                 </div>
                 ${overdueAlert}
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
                     <div class="lg:col-span-2 card bg-white p-6 rounded-lg shadow">
                         <h3 class="text-lg font-semibold mb-4">🗓️ รายการหนี้ที่ใกล้ถึงกำหนดชำระ (30 วันข้างหน้า)</h3>
                         <div class="overflow-x-auto">
@@ -417,7 +456,9 @@
                         <div class="w-full bg-gray-200 rounded-full h-4 my-2"><div class="bg-gradient-to-r from-blue-500 to-purple-600 h-4 rounded-full" style="width: ${paymentProgress.toFixed(2)}%"></div></div>
                         <p class="text-right font-bold">${paymentProgress.toFixed(2)}%</p>
                     </div>
-                </div>`;
+                </div>
+                ${statementSection}
+                `;
         };
         
         const renderDebtors = () => {
@@ -455,6 +496,7 @@
                             <input type="hidden" id="debt-id">
                             <div><label for="debt-debtor-id" class="block text-sm font-medium text-gray-700">เลือกลูกหนี้*</label><select id="debt-debtor-id" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required><option value="">-- เลือกลูกหนี้ --</option>${state.debtors.map(d => `<option value="${d.id}">${d.name}</option>`).join('')}</select></div>
                             <div class="grid grid-cols-2 gap-4"><div><label for="debt-amount" class="block text-sm font-medium text-gray-700">จำนวนเงิน (บาท)*</label><input type="number" id="debt-amount" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-interest-rate" class="block text-sm font-medium text-gray-700">อัตราดอกเบี้ย (%/เดือน)</label><input type="number" id="debt-interest-rate" min="0" step="0.01" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"></div></div>
+                            <div><label for="debt-interest-type" class="block text-sm font-medium text-gray-700">วิธีการคิดดอกเบี้ย</label><select id="debt-interest-type" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"><option value="simple">คิดจากเงินต้น (ปกติ)</option><option value="compound">ทบต้น (กรณีผิดนัด)</option></select></div>
                             <div class="grid grid-cols-2 gap-4"><div><label for="debt-date" class="block text-sm font-medium text-gray-700">วันที่ให้กู้*</label><input type="date" id="debt-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm" required></div><div><label for="debt-due-date" class="block text-sm font-medium text-gray-700">วันครบกำหนด</label><input type="date" id="debt-due-date" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"></div></div>
                             <div><label for="debt-type" class="block text-sm font-medium text-gray-700">ประเภทหนี้</label><select id="debt-type" class="mt-1 block w-full form-input rounded-md border-gray-300 shadow-sm"><option>เงินกู้ส่วนบุคคล</option><option>เงินกู้ธุรกิจ</option><option>เงินกู้ฉุกเฉิน</option><option>อื่นๆ</option></select></div>
                             <div><label for="debt-evidence-file" class="block text-sm font-medium text-gray-700">หลักฐานการกู้ (รูปภาพ/PDF)</label><label for="debt-evidence-file" class="file-input-label mt-1 flex justify-center px-6 pt-5 pb-6 rounded-md"><div class="space-y-1 text-center"><svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><p class="text-sm text-gray-600" id="debt-evidence-name">คลิกเพื่อเลือกไฟล์</p></div></label><input type="file" id="debt-evidence-file" class="hidden" accept="image/*,.pdf"></div>
@@ -469,7 +511,7 @@
                                 const details = calculateDebtDetails(debt.id); 
                                 const debtor = state.debtors.find(d => d.id === debt.debtorId); 
                                 const overdueBadge = details.isOverdue ? `<span class="bg-red-100 text-red-800 text-xs font-bold mr-2 px-2.5 py-0.5 rounded-full">เกินกำหนด ${details.daysOverdue} วัน</span>` : ''; 
-                                const interestText = (debt.interestRate && debt.interestRate > 0) ? `| ดอกเบี้ย (${debt.interestRate}%/เดือน)` : '| ไม่มีดอกเบี้ย';
+                                const interestText = (debt.interestRate && debt.interestRate > 0) ? `| ดอกเบี้ย (${debt.interestRate}%/เดือน, ${debt.interestType === 'compound' ? 'ทบต้น' : 'เงินต้น'})` : '| ไม่มีดอกเบี้ย';
                                 return `
                                     <div class="border p-4 rounded-lg ${details.isOverdue ? 'bg-red-50' : 'bg-gray-50'}">
                                         <div class="flex justify-between items-start">
@@ -539,7 +581,8 @@
                 </div>
              `;
         };
-        const renderStatement = () => {
+
+        const renderStatementSection = () => {
             const debtorOptions = state.debtors.map(d => `<option value="${d.id}" ${state.statementSelectedDebtor === d.id ? 'selected' : ''}>${d.name}</option>`).join('');
             const statementTable = state.statementSelectedDebtor ? generateDebtorStatementTable(state.statementSelectedDebtor) : generateGlobalStatementTable();
 
@@ -560,7 +603,7 @@
                     </div>
                 </div>
             `;
-        };
+        }
 
         const generateGlobalStatementTable = () => {
             const allDebtsAsTx = state.debts.map(d => ({ ...d, type: 'debt', txDate: d.date }));
@@ -877,7 +920,12 @@
         };
 
         // --- EVENT HANDLERS & LOGIC ---
-        const handleTabClick = (e) => { if (e.target.dataset.tab) { state.activeTab = e.target.dataset.tab; render(); } };
+        const handleTabClick = (e) => { 
+            if (e.target.dataset.tab) { 
+                state.activeTab = e.target.dataset.tab; 
+                render(); 
+            } 
+        };
         
         const handleDebtorFormSubmit = (e) => {
             e.preventDefault();
@@ -912,6 +960,7 @@
                     id: id || generateId(), debtorId: form.querySelector('#debt-debtor-id').value, 
                     amount: parseFloat(form.querySelector('#debt-amount').value), 
                     interestRate: parseFloat(form.querySelector('#debt-interest-rate').value) || 0,
+                    interestType: form.querySelector('#debt-interest-type').value,
                     date: form.querySelector('#debt-date').value, dueDate: form.querySelector('#debt-due-date').value, 
                     type: form.querySelector('#debt-type').value, description: form.querySelector('#debt-description').value.trim(), 
                     createdAt: id ? state.debts.find(d => d.id === id).createdAt : new Date().toISOString(), evidence: evidenceUrl
@@ -1016,6 +1065,7 @@
             document.getElementById('debt-debtor-id').value = debt.debtorId;
             document.getElementById('debt-amount').value = debt.amount;
             document.getElementById('debt-interest-rate').value = debt.interestRate || '';
+            document.getElementById('debt-interest-type').value = debt.interestType || 'simple';
             document.getElementById('debt-date').value = debt.date ? new Date(debt.date).toISOString().substring(0, 10) : '';
             document.getElementById('debt-due-date').value = debt.dueDate ? new Date(debt.dueDate).toISOString().substring(0, 10) : '';
             document.getElementById('debt-type').value = debt.type;
@@ -1148,7 +1198,6 @@
                 debtSelectEl.disabled = true;
                 return;
             }
-            // Include debts that might have been fully paid if we are editing a payment for it
             const relevantDebts = selectedDebtId 
                 ? state.debts.filter(d => d.debtorId === debtorId) 
                 : state.debts.filter(d => d.debtorId === debtorId && calculateDebtDetails(d.id).balance > 0);
@@ -1223,7 +1272,12 @@
             document.getElementById('notification-bell')?.addEventListener('click', toggleNotificationPanel);
             document.querySelectorAll('.view-evidence-btn').forEach(btn => btn.addEventListener('click', e => { const { type, id } = e.currentTarget.dataset; const item = state[type === 'debt' ? 'debts' : 'payments'].find(i => i.id === id); if (item && item.evidence) window.open(item.evidence, '_blank'); }));
             const activeTab = state.activeTab;
-            if (activeTab === 'debtors') {
+            if (activeTab === 'dashboard') {
+                document.getElementById('statement-debtor-select')?.addEventListener('change', e => {
+                    state.statementSelectedDebtor = e.target.value;
+                    render();
+                });
+            } else if (activeTab === 'debtors') {
                 document.getElementById('debtor-form')?.addEventListener('submit', handleDebtorFormSubmit);
                 document.querySelectorAll('.edit-debtor-btn').forEach(btn => btn.addEventListener('click', (e) => handleEditDebtorClick(e.currentTarget.dataset.id)));
                 document.querySelectorAll('.delete-debtor-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeleteDebtorClick(e.currentTarget.dataset.id)));
@@ -1250,11 +1304,6 @@
                     document.getElementById('payment-submit-btn').textContent = 'บันทึกการชำระ';
                     document.getElementById('cancel-edit-payment').classList.add('hidden');
                     updateDebtsForPaymentForm(null);
-                });
-            } else if (activeTab === 'statement') {
-                document.getElementById('statement-debtor-select')?.addEventListener('change', e => {
-                    state.statementSelectedDebtor = e.target.value;
-                    render();
                 });
             } else if (activeTab === 'settings') {
                 document.getElementById('save-settings-btn')?.addEventListener('click', handleSaveSettings);
