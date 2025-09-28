@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎯 ระบบจัดการลูกหนี้ V.11 Pro (Drive-Integrated)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Kanit', sans-serif;
+            background-color: #f0f2f5;
+        }
+        .gradient-bg {
+            background-image: linear-gradient(to right, #667eea, #764ba2);
+        }
+        .tab-active {
+            border-bottom: 3px solid #fff;
+            color: #fff;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+        .tab-inactive {
+            color: #e0e0e0;
+        }
+        .card {
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .notification-panel {
+            transition: transform 0.3s ease-in-out;
+            transform: translateX(100%);
+        }
+        .notification-panel.open {
+            transform: translateX(0);
+        }
+        .form-input {
+            transition: border-color 0.2s;
+        }
+        .form-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.4);
+        }
+        .btn-primary {
+            background-image: linear-gradient(to right, #667eea, #764ba2);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn-primary:hover {
+            box-shadow: 0 7px 14px rgba(50, 50, 93, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08);
+            transform: translateY(-1px);
+        }
+        .btn-primary:disabled {
+             background-image: none;
+             background-color: #a0aec0;
+             cursor: not-allowed;
+        }
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -29px;
+            top: 5px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background-color: white;
+            border: 4px solid #667eea;
+        }
+    </style>
+</head>
+<body class="antialiased text-gray-800">
+
+    <!-- Main Container -->
+    <div id="app" class="min-h-screen flex flex-col">
+
+        <!-- Header -->
+        <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
+            <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+                <h1 class="text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.11 Pro</h1>
+                <div class="relative">
+                    <button id="notification-bell" class="relative focus:outline-none">
+                        <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                        <span id="notification-badge" class="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-semibold rounded-full w-5 h-5 flex items-center justify-center hidden">0</span>
+                    </button>
+                </div>
+            </div>
+            <!-- Tabs Navigation -->
+            <nav id="tabs-container" class="bg-white/10">
+                <div class="container mx-auto px-4 flex space-x-2 overflow-x-auto">
+                    <button data-tab="dashboard" class="py-3 px-4 font-semibold whitespace-nowrap tab-active">📊 แดชบอร์ด</button>
+                    <button data-tab="debtors" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">👥 จัดการลูกหนี้</button>
+                    <button data-tab="debts" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">💳 จัดการหนี้</button>
+                    <button data-tab="payments" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">💸 ชำระหนี้</button>
+                    <button data-tab="notifications" class="py-3 px-4 font-semibold whitespace-nowrap tab-inactive">🔔 แจ้งเตือน & ตั้งค่า</button>
+                </div>
+            </nav>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-grow container mx-auto p-4 md:p-6">
+            <div id="tab-content">
+                <!-- Content will be injected by JavaScript -->
+            </div>
+        </main>
+
+    </div>
+
+    <!-- Modals & Overlays -->
+    <div id="modal-container"></div>
+    <div id="alert-container" class="fixed top-20 right-5 z-50 space-y-2"></div>
+    <div id="notification-panel-container"></div>
+
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- STATE MANAGEMENT ---
+        let state = {
+            debtors: [],
+            debts: [],
+            payments: [],
+            notifications: [],
+            settings: {
+                notifications: { overdue: true, upcoming: true, daysInAdvance: 7 },
+                googleSheetUrl: ''
+            },
+            activeTab: 'dashboard',
+            syncStatus: 'idle',
+            debtorsSearchQuery: '',
+            debtsSearchQuery: ''
+        };
+
+        // --- UTILITY FUNCTIONS ---
+        const generateId = () => '_' + Math.random().toString(36).substr(2, 9);
+        const formatCurrency = (amount) => new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(amount);
+        const formatDate = (dateString) => new Date(dateString).toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' });
+        const getDaysDifference = (date1, date2) => Math.round((new Date(date1) - new Date(date2)) / (1000 * 60 * 60 * 24));
+
+        // --- LOCAL STORAGE ---
+        const saveData = () => {
+            localStorage.setItem('debtManagerDataV11ProDrive', JSON.stringify(state));
+        };
+
+        const loadData = () => {
+            const data = localStorage.getItem('debtManagerDataV11ProDrive');
+            if (data) {
+                state = JSON.parse(data);
+                if (!state.settings) state.settings = { notifications: { overdue: true, upcoming: true, daysInAdvance: 7 }, googleSheetUrl: '' };
+                if (!state.syncStatus) state.syncStatus = 'idle';
+                if (!state.debtorsSearchQuery) state.debtorsSearchQuery = '';
+                if (!state.debtsSearchQuery) state.debtsSearchQuery = '';
+            }
+        };
+
+        // --- CALCULATION LOGIC ---
+        const calculateDebtDetails = (debtId) => {
+            const debt = state.debts.find(d => d.id === debtId);
+            if (!debt) return { totalInterest: 0, totalPaid: 0, balance: 0, isOverdue: false, daysOverdue: 0 };
+            const startDate = new Date(debt.date), today = new Date();
+            const monthsDiff = (today.getFullYear() - startDate.getFullYear()) * 12 + (today.getMonth() - startDate.getMonth());
+            const totalInterest = monthsDiff > 0 ? debt.amount * (debt.interestRate / 100) * monthsDiff : 0;
+            const totalDebt = debt.amount + totalInterest;
+            const totalPaid = state.payments.filter(p => p.debtId === debtId).reduce((sum, p) => sum + p.amount, 0);
+            const balance = totalDebt - totalPaid;
+            const isOverdue = new Date(debt.dueDate) < today && balance > 0;
+            const daysOverdue = isOverdue ? getDaysDifference(today, debt.dueDate) : 0;
+            return { totalInterest, totalPaid, balance, totalDebt, isOverdue, daysOverdue };
+        };
+
+        const getDebtorSummary = (debtorId) => ({ totalBalance: state.debts.filter(d => d.debtorId === debtorId).reduce((sum, debt) => sum + calculateDebtDetails(debt.id).balance, 0) });
+
+        // --- UI RENDERING ---
+        const render = () => {
+            const tab = state.activeTab;
+            const contentEl = document.getElementById('tab-content');
+            document.querySelectorAll('#tabs-container button').forEach(button => {
+                button.classList.toggle('tab-active', button.dataset.tab === tab);
+                button.classList.toggle('tab-inactive', button.dataset.tab !== tab);
+            });
+            const renderMap = {
+                dashboard: renderDashboard,
+                debtors: renderDebtors,
+                debts: renderDebts,
+                payments: renderPayments,
+                notifications: renderNotificationsAndSettings
+            };
+            if (renderMap[tab]) contentEl.innerHTML = renderMap[tab]();
+            attachEventListeners();
+            updateNotificationBell();
+        };
+        
+        const renderDashboard = () => {
+            let totalPrincipal = state.debts.reduce((sum, d) => sum + d.amount, 0);
+            let totalPaid = state.payments.reduce((sum, p) => sum + p.amount, 0);
+            let totalInterest = 0, overdueDebtsCount = 0;
+            let upcomingDebts = [];
+            state.debts.forEach(debt => {
+                const details = calculateDebtDetails(debt.id);
+                totalInterest += details.totalInterest;
+                if (details.isOverdue) overdueDebtsCount++;
+                const daysUntilDue = getDaysDifference(debt.dueDate, new Date());
+                if (daysUntilDue >= 0 && daysUntilDue <= 30) {
+                    upcomingDebts.push({ ...debt, daysUntilDue, balance: details.balance });
+                }
+            });
+            const totalDebtValue = totalPrincipal + totalInterest;
+            const totalBalance = totalDebtValue - totalPaid;
+            const paymentProgress = totalDebtValue > 0 ? (totalPaid / totalDebtValue) * 100 : 0;
+            const overdueAlert = overdueDebtsCount > 0 ? `<div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6 animate-pulse"><p class="font-bold">🚨 แจ้งเตือนด่วน!</p><p>มีหนี้เกินกำหนดชำระจำนวน ${overdueDebtsCount} รายการ</p></div>` : '';
+            return `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6"><div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500">👥 จำนวนลูกหนี้</h3><p class="text-2xl font-bold">${state.debtors.length} คน</p></div><div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500">💰 หนี้ทั้งหมด (เงินต้น)</h3><p class="text-2xl font-bold">${formatCurrency(totalPrincipal)}</p></div><div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500">📈 ดอกเบี้ยสะสม</h3><p class="text-2xl font-bold">${formatCurrency(totalInterest)}</p></div><div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500 text-green-600">💸 ชำระแล้ว</h3><p class="text-2xl font-bold text-green-600">${formatCurrency(totalPaid)}</p></div><div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500 text-red-600">❗ หนี้คงค้าง</h3><p class="text-2xl font-bold text-red-600">${formatCurrency(totalBalance)}</p></div></div>${overdueAlert}<div class="grid grid-cols-1 lg:grid-cols-3 gap-6"><div class="lg:col-span-2 card bg-white p-6 rounded-lg shadow"><h3 class="text-lg font-semibold mb-4">🗓️ รายการหนี้ที่ใกล้ครบกำหนด (30 วันข้างหน้า)</h3><div class="overflow-x-auto"><table class="w-full text-sm text-left"><thead class="text-xs text-gray-700 uppercase bg-gray-50"><tr><th class="px-4 py-2">ลูกหนี้</th><th class="px-4 py-2">ยอดคงเหลือ</th><th class="px-4 py-2">ครบกำหนดใน</th></tr></thead><tbody>${upcomingDebts.length > 0 ? upcomingDebts.sort((a,b) => a.daysUntilDue - b.daysUntilDue).map(debt => `<tr class="bg-white border-b"><td class="px-4 py-2 font-medium">${state.debtors.find(d => d.id === debt.debtorId)?.name || 'N/A'}</td><td class="px-4 py-2">${formatCurrency(debt.balance)}</td><td class="px-4 py-2"><span class="bg-yellow-100 text-yellow-800 text-xs font-medium mr-2 px-2.5 py-0.5 rounded">${debt.daysUntilDue} วัน</span></td></tr>`).join('') : '<tr><td colspan="3" class="text-center py-4 text-gray-500">ไม่มีรายการ</td></tr>'}</tbody></table></div></div><div class="card bg-white p-6 rounded-lg shadow"><h3 class="text-lg font-semibold mb-4">📊 สถิติการชำระหนี้</h3><p class="text-gray-600">ชำระแล้ว ${formatCurrency(totalPaid)} จากทั้งหมด ${formatCurrency(totalDebtValue)}</p><div class="w-full bg-gray-200 rounded-full h-4 my-2"><div class="bg-gradient-to-r from-blue-500 to-purple-600 h-4 rounded-full" style="width: ${paymentProgress.toFixed(2)}%"></div></div><p class="text-right font-bold">${paymentProgress.toFixed(2)}%</p></div></div>`;
+        };
+
+        const renderDebtors = () => { /* ... Unchanged ... */ };
+        
+        const renderDebts = () => { /* ... Unchanged ... */ };
+        
+        const renderPayments = () => { /* ... Unchanged ... */ };
+
+        const renderNotificationsAndSettings = () => { /* ... Unchanged ... */ };
+        
+        const renderNotificationItem = (notification, isPanelItem = true) => { /* ... Unchanged ... */ };
+        const renderNotificationPanel = () => { /* ... Unchanged ... */ };
+        
+        const showAlert = (message, type = 'success') => { /* ... Unchanged ... */ };
+        const showConfirmationModal = (title, message, onConfirm) => { /* ... Unchanged ... */ };
+
+        // --- FILE & GOOGLE DRIVE HANDLING ---
+        const uploadFileToDrive = async (file) => {
+            if (!state.settings.googleSheetUrl) {
+                throw new Error('กรุณาตั้งค่า Google Apps Script URL ก่อน');
+            }
+            if (!file) return null;
+
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const [meta, data] = e.target.result.split(',');
+                        const [_, mimeType] = meta.match(/:(.*?);/);
+                        const payload = { action: 'uploadFile', fileData: data, fileName: file.name, mimeType: mimeType };
+                        
+                        const res = await fetch(state.settings.googleSheetUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        
+                        const result = await res.json();
+                        if (result.status === 'success') {
+                            resolve(result.fileUrl);
+                        } else {
+                            throw new Error(result.message || 'เกิดข้อผิดพลาดในการอัปโหลดไฟล์');
+                        }
+                    } catch (error) {
+                        reject(error);
+                    }
+                };
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(file);
+            });
+        };
+
+        // --- EVENT HANDLERS & LOGIC ---
+        const handleTabClick = (e) => { if (e.target.dataset.tab) { state.activeTab = e.target.dataset.tab; render(); } };
+
+        const handleDebtorFormSubmit = (e) => {
+            e.preventDefault();
+            const form = e.target, id = form.querySelector('#debtor-id').value;
+            const debtorData = {
+                id: id || generateId(),
+                name: form.querySelector('#debtor-name').value.trim(),
+                phone: form.querySelector('#debtor-phone').value.trim(),
+                email: form.querySelector('#debtor-email').value.trim(),
+                idCard: form.querySelector('#debtor-id-card').value.trim(),
+                address: form.querySelector('#debtor-address').value.trim(),
+                createdAt: id ? state.debtors.find(d => d.id === id).createdAt : new Date().toISOString()
+            };
+            if (!debtorData.name) { showAlert('กรุณากรอกชื่อ-นามสกุล', 'error'); return; }
+            if (id) {
+                const index = state.debtors.findIndex(d => d.id === id); state.debtors[index] = debtorData;
+                showAlert('อัปเดตข้อมูลลูกหนี้สำเร็จ');
+            } else {
+                state.debtors.push(debtorData); showAlert('เพิ่มข้อมูลลูกหนี้สำเร็จ');
+            }
+            saveData(); render();
+        };
+        
+        const handleDebtFormSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target, id = form.querySelector('#debt-id').value, submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.disabled = true; submitBtn.textContent = 'กำลังบันทึก...';
+            
+            try {
+                const fileInput = form.querySelector('#debt-evidence-file');
+                let evidenceUrl = id ? state.debts.find(d => d.id === id).evidence : null;
+                if (fileInput.files[0]) {
+                    submitBtn.textContent = 'กำลังอัปโหลดไฟล์...';
+                    evidenceUrl = await uploadFileToDrive(fileInput.files[0]);
+                }
+                const debtData = {
+                    id: id || generateId(),
+                    debtorId: form.querySelector('#debt-debtor-id').value,
+                    amount: parseFloat(form.querySelector('#debt-amount').value),
+                    interestRate: parseFloat(form.querySelector('#debt-interest-rate').value),
+                    date: form.querySelector('#debt-date').value,
+                    dueDate: form.querySelector('#debt-due-date').value,
+                    type: form.querySelector('#debt-type').value,
+                    description: form.querySelector('#debt-description').value.trim(),
+                    createdAt: id ? state.debts.find(d => d.id === id).createdAt : new Date().toISOString(),
+                    evidence: evidenceUrl
+                };
+                if (!debtData.debtorId || !debtData.amount || !debtData.interestRate || !debtData.date || !debtData.dueDate) { throw new Error('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน'); }
+                if (id) {
+                    const index = state.debts.findIndex(d => d.id === id); state.debts[index] = debtData;
+                    showAlert('อัปเดตข้อมูลหนี้สำเร็จ');
+                } else { state.debts.push(debtData); showAlert('เพิ่มข้อมูลหนี้สำเร็จ'); }
+                saveData(); checkNotifications(); render();
+            } catch (error) {
+                showAlert(error.message, 'error');
+            } finally {
+                submitBtn.disabled = false; submitBtn.textContent = 'บันทึกข้อมูล';
+            }
+        };
+
+        const handlePaymentFormSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target, submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.disabled = true; submitBtn.textContent = 'กำลังบันทึก...';
+
+            try {
+                const fileInput = form.querySelector('#payment-evidence-file');
+                let evidenceUrl = null;
+                if (fileInput.files[0]) {
+                    submitBtn.textContent = 'กำลังอัปโหลดไฟล์...';
+                    evidenceUrl = await uploadFileToDrive(fileInput.files[0]);
+                }
+                const paymentData = {
+                    id: generateId(),
+                    debtorId: form.querySelector('#payment-debtor-id').value,
+                    debtId: form.querySelector('#payment-debt-id').value,
+                    amount: parseFloat(form.querySelector('#payment-amount').value),
+                    date: form.querySelector('#payment-date').value,
+                    method: form.querySelector('#payment-method').value,
+                    note: form.querySelector('#payment-note').value.trim(),
+                    createdAt: new Date().toISOString(),
+                    evidence: evidenceUrl
+                };
+                if (!paymentData.debtorId || !paymentData.debtId || !paymentData.amount || !paymentData.date) { throw new Error('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน'); }
+                state.payments.push(paymentData);
+                createNotification({ type: 'payment', title: 'ได้รับการชำระหนี้', message: `ลูกหนี้ ${state.debtors.find(d=>d.id===paymentData.debtorId)?.name} ชำระเงิน ${formatCurrency(paymentData.amount)}` });
+                saveData(); showAlert('บันทึกการชำระเงินสำเร็จ'); render();
+            } catch (error) {
+                showAlert(error.message, 'error');
+            } finally {
+                submitBtn.disabled = false; submitBtn.textContent = 'บันทึกการชำระ';
+            }
+        };
+
+        const handleSaveSettings = () => { /* ... Unchanged ... */ };
+        const handleEditDebtorClick = (id) => { /* ... Unchanged ... */ };
+        const handleEditDebtClick = (id) => { /* ... Unchanged ... */ };
+        const handleDeleteDebtorClick = (id) => { /* ... Unchanged ... */ };
+        const handleDeleteDebtClick = (id) => { /* ... Unchanged ... */ };
+        const updateNotificationBell = () => { /* ... Unchanged ... */ };
+        const toggleNotificationPanel = () => { /* ... Unchanged ... */ };
+        const handleMarkNotificationRead = (id) => { /* ... Unchanged ... */ };
+        const handleDeleteNotification = (id) => { /* ... Unchanged ... */ };
+        const updateDebtsForPaymentForm = (debtorId) => { /* ... Unchanged ... */ };
+        const createNotification = (data) => { /* ... Unchanged ... */ };
+        const checkNotifications = () => { /* ... Unchanged ... */ };
+
+        const syncToGoogleSheets = async (showSuccessAlert = false) => {
+            if (!state.settings.googleSheetUrl) {
+                if(showSuccessAlert) showAlert('กรุณาตั้งค่า Google Apps Script URL ก่อน', 'error');
+                return;
+            }
+            updateSyncStatus('syncing');
+            try {
+                const payload = { action: 'syncData', data: { debtors: state.debtors, debts: state.debts, payments: state.payments } };
+                const res = await fetch(state.settings.googleSheetUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const result = await res.json();
+                if (result.status !== 'success') throw new Error(result.message);
+                updateSyncStatus('success');
+                if (showSuccessAlert) showAlert('ซิงค์ข้อมูลไปยัง Google Sheets สำเร็จ');
+            } catch (error) {
+                console.error("Sync error:", error); updateSyncStatus('error');
+                if(showSuccessAlert) showAlert('เกิดข้อผิดพลาดในการซิงค์ข้อมูล', 'error');
+            }
+        };
+
+        const loadFromGoogleSheets = async () => {
+             if (!state.settings.googleSheetUrl) { showAlert('กรุณาตั้งค่า Google Apps Script URL ก่อน', 'error'); return; }
+            updateSyncStatus('syncing');
+            try {
+                 const res = await fetch(`${state.settings.googleSheetUrl}?action=getData`);
+                 if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                 const result = await res.json();
+                 if (result.status !== 'success') throw new Error(result.message);
+                 state.debtors = result.data.debtors || [];
+                 state.debts = result.data.debts || [];
+                 state.payments = result.data.payments || [];
+                 saveData(); updateSyncStatus('success');
+                 showAlert('โหลดข้อมูลจาก Google Sheets สำเร็จ');
+                 render();
+            } catch (error) {
+                 console.error("Load error:", error); updateSyncStatus('error');
+                 showAlert('เกิดข้อผิดพลาดในการโหลดข้อมูล', 'error');
+            }
+        };
+
+        const attachEventListeners = () => {
+            document.getElementById('tabs-container').addEventListener('click', handleTabClick);
+            document.getElementById('notification-bell').addEventListener('click', toggleNotificationPanel);
+            document.querySelectorAll('.view-evidence-btn').forEach(btn => btn.addEventListener('click', e => {
+                const { type, id } = e.currentTarget.dataset;
+                const item = state[type === 'debt' ? 'debts' : 'payments'].find(i => i.id === id);
+                if (item && item.evidence) {
+                    window.open(item.evidence, '_blank');
+                }
+            }));
+
+            const activeTab = state.activeTab;
+            if (activeTab === 'debtors') {
+                document.getElementById('debtor-form')?.addEventListener('submit', handleDebtorFormSubmit);
+                document.querySelectorAll('.edit-debtor-btn').forEach(btn => btn.addEventListener('click', (e) => handleEditDebtorClick(e.currentTarget.dataset.id)));
+                document.querySelectorAll('.delete-debtor-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeleteDebtorClick(e.currentTarget.dataset.id)));
+                document.getElementById('cancel-edit-debtor')?.addEventListener('click', () => { document.getElementById('debtor-form').reset(); document.getElementById('debtor-id').value = ''; document.getElementById('cancel-edit-debtor').classList.add('hidden'); });
+                document.getElementById('debtors-search-input')?.addEventListener('input', e => { state.debtorsSearchQuery = e.target.value; render(); });
+            } else if (activeTab === 'debts') {
+                document.getElementById('debt-form')?.addEventListener('submit', handleDebtFormSubmit);
+                document.querySelectorAll('.edit-debt-btn').forEach(btn => btn.addEventListener('click', (e) => handleEditDebtClick(e.currentTarget.dataset.id)));
+                document.querySelectorAll('.delete-debt-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeleteDebtClick(e.currentTarget.dataset.id)));
+                document.getElementById('cancel-edit-debt')?.addEventListener('click', () => { document.getElementById('debt-form').reset(); document.getElementById('debt-id').value = ''; document.getElementById('cancel-edit-debt').classList.add('hidden'); document.getElementById('debt-evidence-name').textContent = ''; });
+                document.getElementById('debts-search-input')?.addEventListener('input', e => { state.debtsSearchQuery = e.target.value; render(); });
+            } else if (activeTab === 'payments') {
+                document.getElementById('payment-form')?.addEventListener('submit', handlePaymentFormSubmit);
+                document.getElementById('payment-debtor-id')?.addEventListener('change', (e) => updateDebtsForPaymentForm(e.target.value));
+            } else if (activeTab === 'notifications') {
+                document.getElementById('save-settings-btn')?.addEventListener('click', handleSaveSettings);
+                document.getElementById('load-from-sheets')?.addEventListener('click', loadFromGoogleSheets);
+                document.getElementById('sync-to-sheets')?.addEventListener('click', () => syncToGoogleSheets(true));
+            }
+        };
+
+        const init = () => {
+            loadData(); render(); checkNotifications();
+            setInterval(checkNotifications, 5 * 60 * 1000);
+            setInterval(() => { if (state.settings.googleSheetUrl && navigator.onLine) syncToGoogleSheets(false); }, 5 * 60 * 1000);
+        };
+
+        init();
+    });
+    </script>
+
+</body>
+</html>
+
