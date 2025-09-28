@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale-1.0">
     <title>🎯 ระบบจัดการลูกหนี้ V.12 (Cloud-Based)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -264,12 +264,26 @@
 
         // --- UI RENDERING ---
         const render = () => {
+            // If no URL is set, force the user to the settings tab.
+            if (!state.settings.googleSheetUrl && state.activeTab !== 'settings') {
+                state.activeTab = 'settings';
+            }
+
             const tab = state.activeTab;
             const contentEl = document.getElementById('tab-content');
             
+            // Disable other tabs if not configured
             document.querySelectorAll('#tabs-container button').forEach(button => {
                 button.classList.toggle('tab-active', button.dataset.tab === tab);
                 button.classList.toggle('tab-inactive', button.dataset.tab !== tab);
+
+                if (!state.settings.googleSheetUrl && button.dataset.tab !== 'settings') {
+                    button.disabled = true;
+                    button.classList.add('opacity-50', 'cursor-not-allowed');
+                } else {
+                    button.disabled = false;
+                    button.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
             });
             
             const renderMap = {
@@ -420,8 +434,15 @@
              `;
         };
         const renderSettings = () => {
+             const welcomeMessage = !state.settings.googleSheetUrl ? `
+                <div class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 rounded-lg mb-6">
+                    <h4 class="font-bold">ยินดีต้อนรับ!</h4>
+                    <p>กรุณาตั้งค่าการเชื่อมต่อกับ Google Sheets ของคุณก่อนเพื่อเริ่มต้นใช้งานแอปพลิเคชันอย่างเต็มรูปแบบ</p>
+                </div>
+            ` : '';
             return `
                 <div class="max-w-4xl mx-auto">
+                    ${welcomeMessage}
                     <div class="card bg-white p-6 rounded-lg shadow mb-6">
                         <h3 class="text-xl font-semibold mb-4 border-b pb-2">🔄 การเชื่อมต่อฐานข้อมูล Google Sheets</h3>
                         <p class="text-gray-600 mb-4">แอปพลิเคชันนี้ใช้ Google Sheets เป็นฐานข้อมูลหลักเพื่อเก็บข้อมูลทั้งหมดของคุณอย่างปลอดภัย กรุณาตั้งค่าการเชื่อมต่อเพื่อเริ่มต้นใช้งาน</p>
@@ -469,7 +490,27 @@
             statusEl.innerHTML = `<span class="sync-status-pill ${current.class}">${current.text}</span>`;
         };
 
-        const uploadFileToDrive = async (file) => { /* ... same as previous version ... */ };
+        const uploadFileToDrive = async (file) => {
+            if (!state.settings.googleSheetUrl) throw new Error('กรุณาตั้งค่า Google Apps Script URL ก่อน');
+            if (!file) return null;
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const [meta, data] = e.target.result.split(',');
+                        const [_, mimeType] = meta.match(/:(.*?);/);
+                        const payload = { action: 'uploadFile', fileData: data, fileName: file.name, mimeType: mimeType };
+                        const res = await fetch(state.settings.googleSheetUrl, { method: 'POST', body: JSON.stringify(payload) });
+                        if (!res.ok) throw new Error(`Server error: ${res.statusText}`);
+                        const result = await res.json();
+                        if (result.status === 'success') resolve(result.fileUrl);
+                        else throw new Error(result.message || 'เกิดข้อผิดพลาดในการอัปโหลดไฟล์');
+                    } catch (error) { reject(error); }
+                };
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(file);
+            });
+        };
         
         const saveDataToSheets = async (showSuccessAlert = false) => {
             if (!state.settings.googleSheetUrl) {
@@ -505,7 +546,6 @@
                  state.debtors = result.data.debtors || [];
                  state.debts = result.data.debts || [];
                  state.payments = result.data.payments || [];
-                 // Do not save to local storage here, as sheets is the source of truth
                  updateSyncStatus('success');
                  showAlert('โหลดข้อมูลล่าสุดจาก Google Sheets สำเร็จ', 'success');
             } catch (error) {
@@ -590,10 +630,50 @@
             }
         };
 
-        const handleEditDebtorClick = (id) => { /* ... same ... */ };
-        const handleEditDebtClick = (id) => { /* ... same ... */ };
-        const handleDeleteDebtorClick = (id) => { /* ... same ... */ };
-        const handleDeleteDebtClick = (id) => { /* ... same ... */ };
+        const handleEditDebtorClick = (id) => {
+            const debtor = state.debtors.find(d => d.id === id);
+            if (!debtor) return;
+            document.getElementById('debtor-id').value = debtor.id;
+            document.getElementById('debtor-name').value = debtor.name;
+            document.getElementById('debtor-phone').value = debtor.phone;
+            document.getElementById('debtor-email').value = debtor.email;
+            document.getElementById('debtor-id-card').value = debtor.idCard;
+            document.getElementById('debtor-address').value = debtor.address;
+            document.getElementById('debtor-form-title').textContent = '📝 แก้ไขข้อมูลลูกหนี้';
+            document.getElementById('cancel-edit-debtor').classList.remove('hidden');
+            window.scrollTo(0,0);
+        };
+        const handleEditDebtClick = (id) => {
+            const debt = state.debts.find(d => d.id === id);
+            if (!debt) return;
+            document.getElementById('debt-id').value = debt.id;
+            document.getElementById('debt-debtor-id').value = debt.debtorId;
+            document.getElementById('debt-amount').value = debt.amount;
+            document.getElementById('debt-interest-rate').value = debt.interestRate;
+            document.getElementById('debt-date').value = debt.date;
+            document.getElementById('debt-due-date').value = debt.dueDate;
+            document.getElementById('debt-type').value = debt.type;
+            document.getElementById('debt-description').value = debt.description;
+            document.getElementById('debt-form-title').textContent = '💳 แก้ไขรายการหนี้';
+            document.getElementById('cancel-edit-debt').classList.remove('hidden');
+            document.getElementById('debt-evidence-name').textContent = debt.evidence ? 'มีไฟล์แนบอยู่แล้ว' : 'คลิกเพื่อเลือกไฟล์';
+            window.scrollTo(0,0);
+        };
+        const handleDeleteDebtorClick = (id) => {
+            showConfirmationModal('ยืนยันการลบ', 'คุณแน่ใจหรือไม่ว่าต้องการลบลูกหนี้คนนี้? ข้อมูลหนี้และการชำระทั้งหมดจะถูกลบไปด้วย', () => {
+                state.debtors = state.debtors.filter(d => d.id !== id);
+                state.debts = state.debts.filter(d => d.debtorId !== id);
+                state.payments = state.payments.filter(p => p.debtorId !== id);
+                saveData(); render(); showAlert('ลบข้อมูลลูกหนี้สำเร็จ');
+            });
+        };
+        const handleDeleteDebtClick = (id) => {
+            showConfirmationModal('ยืนยันการลบ', 'คุณแน่ใจหรือไม่ว่าต้องการลบรายการหนี้นี้?', () => {
+                state.debts = state.debts.filter(d => d.id !== id);
+                state.payments = state.payments.filter(p => p.debtId !== id);
+                saveData(); render(); showAlert('ลบข้อมูลหนี้สำเร็จ');
+            });
+        };
         const updateNotificationBell = () => { /* ... same ... */ };
         const toggleNotificationPanel = () => { /* ... same ... */ };
         const handleMarkNotificationRead = (id) => { /* ... same ... */ };
@@ -631,22 +711,30 @@
         };
 
         const init = async () => {
+            // 1. Load settings from backup to see if URL exists
             const savedState = localStorage.getItem('debtManagerData_backup');
             if (savedState) {
                 const parsed = JSON.parse(savedState);
                 state.settings = parsed.settings || state.settings;
             }
-            showLoadingOverlay('กำลังเชื่อมต่อฐานข้อมูล...');
+
+            // 2. Check for URL
             if (state.settings.googleSheetUrl) {
+                // URL exists, proceed with normal loading
+                showLoadingOverlay('กำลังเชื่อมต่อฐานข้อมูลและโหลดข้อมูลล่าสุด...');
                 await loadFromGoogleSheets();
+                hideLoadingOverlay();
+                // Check for notifications after loading data
+                checkNotifications();
+                setInterval(checkNotifications, 5 * 60 * 1000);
             } else {
-                loadLocalBackup();
-                showAlert('กรุณาตั้งค่า Google Sheets เพื่อเริ่มบันทึกข้อมูลออนไลน์', 'info');
+                // No URL found, force user to settings page for setup
+                state.activeTab = 'settings';
+                loadLocalBackup(); // Load any potential old data
             }
-            hideLoadingOverlay();
+
+            // 3. Initial render
             render();
-            checkNotifications();
-            setInterval(checkNotifications, 5 * 60 * 1000);
         };
 
         init();
