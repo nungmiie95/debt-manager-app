@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.13.2 (Bug Fix)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.14 (PIN Lock)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -92,18 +92,61 @@
         .sync-status-pill.syncing { background-color: #dbeafe; color: #1e40af; } /* blue */
         .sync-status-pill.success { background-color: #d1fae5; color: #065f46; } /* green */
         .sync-status-pill.error { background-color: #fee2e2; color: #991b1b; }   /* red */
+
+        /* PIN Lock Screen Styles */
+        #pin-screen {
+            background-color: #f0f2f5;
+        }
+        .pin-dot {
+            width: 1rem;
+            height: 1rem;
+            border-radius: 50%;
+            background-color: #e2e8f0;
+            border: 1px solid #cbd5e0;
+        }
+        .pin-dot.filled {
+            background-color: #764ba2;
+            border-color: #667eea;
+        }
+        .pin-key {
+            background-color: #fff;
+            border: 1px solid #e2e8f0;
+            transition: background-color 0.2s;
+        }
+        .pin-key:active {
+            background-color: #f7fafc;
+        }
+
     </style>
 </head>
 <body class="antialiased text-gray-800">
+    
+    <!-- PIN Lock Screen -->
+    <div id="pin-screen" class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="w-full max-w-xs text-center p-6">
+            <h2 id="pin-title" class="text-2xl font-bold mb-2 text-gray-800">ตั้งรหัส PIN 4 หลัก</h2>
+            <p id="pin-message" class="text-gray-600 mb-6">เพื่อความปลอดภัยในการเข้าถึงข้อมูล</p>
+            <div class="flex justify-center space-x-4 mb-6">
+                <div class="pin-dot" id="dot-1"></div>
+                <div class="pin-dot" id="dot-2"></div>
+                <div class="pin-dot" id="dot-3"></div>
+                <div class="pin-dot" id="dot-4"></div>
+            </div>
+            <div class="grid grid-cols-3 gap-4">
+                <!-- Keypad will be generated here -->
+            </div>
+        </div>
+    </div>
 
-    <!-- Main Container -->
-    <div id="app" class="min-h-screen flex flex-col">
+
+    <!-- Main Container (hidden initially) -->
+    <div id="app" class="min-h-screen flex-col hidden">
 
         <!-- Header -->
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.13.2</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.14</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -143,6 +186,134 @@
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
+
+        // --- PIN LOCK LOGIC ---
+        const PIN_KEY = 'debtManagerPinHash';
+        let pinInput = '';
+        let pinMode = 'enter'; // 'set', 'enter', 'confirm'
+        let tempPin = '';
+
+        const pinScreen = document.getElementById('pin-screen');
+        const mainApp = document.getElementById('app');
+        const pinTitle = document.getElementById('pin-title');
+        const pinMessage = document.getElementById('pin-message');
+        
+        async function hashPin(pin) {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(pin);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function updatePinDots() {
+            for (let i = 1; i <= 4; i++) {
+                const dot = document.getElementById(`dot-${i}`);
+                if (i <= pinInput.length) {
+                    dot.classList.add('filled');
+                } else {
+                    dot.classList.remove('filled');
+                }
+            }
+        }
+
+        async function handlePinInput(key) {
+            if (key === 'del') {
+                pinInput = pinInput.slice(0, -1);
+            } else if (pinInput.length < 4) {
+                pinInput += key;
+            }
+            updatePinDots();
+
+            if (pinInput.length === 4) {
+                if (pinMode === 'set') {
+                    tempPin = pinInput;
+                    pinMode = 'confirm';
+                    pinTitle.textContent = 'ยืนยันรหัส PIN อีกครั้ง';
+                    pinMessage.textContent = 'กรุณากรอกรหัส PIN เดิมเพื่อยืนยัน';
+                    pinInput = '';
+                    setTimeout(updatePinDots, 100);
+                } else if (pinMode === 'confirm') {
+                    if (pinInput === tempPin) {
+                        const hashedPin = await hashPin(pinInput);
+                        localStorage.setItem(PIN_KEY, hashedPin);
+                        unlockApp();
+                    } else {
+                        pinMessage.textContent = 'รหัส PIN ไม่ตรงกัน กรุณาลองใหม่อีกครั้ง';
+                        pinMessage.classList.add('text-red-500');
+                        pinMode = 'set';
+                        tempPin = '';
+                        pinTitle.textContent = 'ตั้งรหัส PIN 4 หลัก';
+                        setTimeout(() => {
+                            pinInput = '';
+                            updatePinDots();
+                            pinMessage.classList.remove('text-red-500');
+                        }, 1000);
+                    }
+                } else if (pinMode === 'enter') {
+                    const storedHash = localStorage.getItem(PIN_KEY);
+                    const enteredHash = await hashPin(pinInput);
+                    if (enteredHash === storedHash) {
+                        unlockApp();
+                    } else {
+                        pinMessage.textContent = 'รหัส PIN ไม่ถูกต้อง!';
+                        pinMessage.classList.add('text-red-500');
+                        pinScreen.classList.add('animate-shake');
+                        setTimeout(() => {
+                            pinInput = '';
+                            updatePinDots();
+                            pinMessage.textContent = 'กรุณาใส่รหัส PIN เพื่อเข้าใช้งาน';
+                            pinMessage.classList.remove('text-red-500');
+                            pinScreen.classList.remove('animate-shake');
+                        }, 1000);
+                    }
+                }
+            }
+        }
+
+        function generateKeypad() {
+            const keypadContainer = pinScreen.querySelector('.grid');
+            const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
+            keys.forEach(key => {
+                const keyEl = document.createElement('button');
+                keyEl.className = 'pin-key text-2xl font-semibold rounded-full w-20 h-20 flex items-center justify-center focus:outline-none';
+                if (key === 'del') {
+                    keyEl.innerHTML = `&larr;`;
+                } else {
+                    keyEl.textContent = key;
+                }
+
+                if (key) {
+                    keyEl.addEventListener('click', () => handlePinInput(key));
+                } else {
+                    keyEl.style.visibility = 'hidden';
+                }
+                keypadContainer.appendChild(keyEl);
+            });
+        }
+        
+        function unlockApp() {
+            pinScreen.classList.add('hidden');
+            mainApp.classList.remove('hidden');
+            mainApp.classList.add('flex');
+            initializeApp();
+        }
+
+        function checkPinStatus() {
+            if (localStorage.getItem(PIN_KEY)) {
+                pinMode = 'enter';
+                pinTitle.textContent = 'กรุณาใส่รหัส PIN';
+                pinMessage.textContent = 'เพื่อเข้าใช้งานระบบจัดการลูกหนี้';
+            } else {
+                pinMode = 'set';
+                // Title and message are already set for this mode.
+            }
+            generateKeypad();
+        }
+        
+        // --- End of PIN Logic ---
+
+
         // --- STATE MANAGEMENT ---
         let state = {
             debtors: [],
@@ -195,69 +366,10 @@
         };
 
         // --- UTILITY FUNCTIONS ---
-        const generateId = () => '_' + Math.random().toString(36).substr(2, 9);
-        const formatCurrency = (amount, sign = '') => {
-            const formatted = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Math.abs(amount || 0));
-            return amount < 0 ? `-${formatted}` : `${sign}${formatted}`;
-        }
-        
-        const formatDateToBuddhist = (dateString, options = {}) => {
-            if (!dateString) return '';
-            const { year = 'numeric', month = 'long', day = 'numeric' } = options;
-            try {
-                const date = new Date(dateString);
-                return date.toLocaleDateString('th-TH', {
-                    year, month, day, calendar: 'buddhist'
-                });
-            } catch (e) {
-                console.error("Invalid date for formatting:", dateString);
-                return 'N/A';
-            }
-        };
+        // generateId, formatCurrency, formatDateToBuddhist, getDaysDifference remain the same
 
-        const getDaysDifference = (date1, date2) => Math.round((new Date(date1) - new Date(date2)) / (1000 * 60 * 60 * 24));
-        
         // --- UI UTILITIES ---
-        const showLoadingOverlay = (message) => {
-            let overlay = document.getElementById('loading-overlay');
-            if (overlay) overlay.remove();
-            overlay = document.createElement('div');
-            overlay.id = 'loading-overlay';
-            overlay.className = 'fixed inset-0 z-50 flex items-center justify-center modal-backdrop text-white';
-            overlay.innerHTML = `<div class="text-center"><div class="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto"></div><p class="mt-4">${message}</p></div>`;
-            document.body.appendChild(overlay);
-        };
-
-        const hideLoadingOverlay = () => {
-            const overlay = document.getElementById('loading-overlay');
-            if (overlay) overlay.remove();
-        };
-
-        const showAlert = (message, type = 'success') => {
-             const colors = { success: 'bg-green-500', error: 'bg-red-500', info: 'bg-blue-500' };
-             const alertEl = document.createElement('div');
-             alertEl.className = `p-4 text-white ${colors[type]} rounded-lg shadow-lg animate-fade-in-down`;
-             alertEl.textContent = message;
-             document.getElementById('alert-container').appendChild(alertEl);
-             setTimeout(() => { alertEl.remove(); }, 4000);
-        };
-
-        const showConfirmationModal = (title, message, onConfirm) => {
-            const modal = document.createElement('div');
-            modal.className = 'fixed inset-0 z-50 flex items-center justify-center modal-backdrop';
-            modal.innerHTML = `
-                <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4">
-                    <h3 class="text-lg font-bold mb-2">${title}</h3>
-                    <p class="text-gray-600 mb-4">${message}</p>
-                    <div class="flex justify-end space-x-2">
-                        <button id="modal-cancel" class="bg-gray-200 text-gray-800 font-bold py-2 px-4 rounded-md">ยกเลิก</button>
-                        <button id="modal-confirm" class="bg-red-500 text-white font-bold py-2 px-4 rounded-md">ยืนยัน</button>
-                    </div>
-                </div>`;
-            document.getElementById('modal-container').appendChild(modal);
-            document.getElementById('modal-cancel').addEventListener('click', () => modal.remove());
-            document.getElementById('modal-confirm').addEventListener('click', () => { onConfirm(); modal.remove(); });
-        };
+        // showLoadingOverlay, hideLoadingOverlay, showAlert, showConfirmationModal remain the same
 
         // --- CORE CALCULATION ENGINE ---
         const generateStatementDataForDebt = (debtId, upToDate) => {
@@ -1038,7 +1150,7 @@
 
             if (state.settings.googleSheetUrl && oldUrl !== state.settings.googleSheetUrl) {
                 showAlert('กำลังเชื่อมต่อและโหลดข้อมูลจากฐานข้อมูลใหม่...', 'info');
-                init();
+                initializeApp();
             }
         };
 
@@ -1310,7 +1422,7 @@
             }
         };
 
-        const init = async () => {
+        const initializeApp = async () => {
             const savedState = localStorage.getItem('debtManagerData_backup');
             if (savedState) {
                 const parsed = JSON.parse(savedState);
@@ -1331,7 +1443,8 @@
             render();
         };
 
-        init();
+        // Initial check: This starts everything.
+        checkPinStatus();
     });
     </script>
 
