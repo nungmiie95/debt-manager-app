@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.14.1 (Critical Fix)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.15 (Ledger & PIN Reset)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -144,6 +144,7 @@
             <div id="keypad" class="grid grid-cols-3 gap-4">
                 <!-- Keypad will be generated here -->
             </div>
+            <a href="#" id="forgot-pin-btn" class="text-sm text-gray-600 hover:underline mt-6 block">ลืมรหัส PIN?</a>
         </div>
     </div>
 
@@ -155,7 +156,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.14.1</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.15</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -197,7 +198,7 @@
     document.addEventListener('DOMContentLoaded', () => {
 
         // --- PIN LOCK LOGIC ---
-        const PIN_KEY = 'debtManagerPinHash';
+        const PIN_KEY = 'debtManagerPinHash_v2';
         let pinInput = '';
         let pinMode = 'enter'; // 'set', 'enter', 'confirm'
         let tempPin = '';
@@ -317,9 +318,16 @@
                 pinMessage.textContent = 'เพื่อเข้าใช้งานระบบจัดการลูกหนี้';
             } else {
                 pinMode = 'set';
-                // Title and message are already set for this mode.
             }
             generateKeypad();
+            document.getElementById('forgot-pin-btn').addEventListener('click', (e) => {
+                e.preventDefault();
+                if (confirm('คุณแน่ใจหรือไม่? การดำเนินการนี้จะล้างรหัส PIN และข้อมูลที่ไม่ได้บันทึกในเครื่องทั้งหมด คุณจะต้องเชื่อมต่อกับ Google Sheets ใหม่อีกครั้งเพื่อกู้คืนข้อมูล')) {
+                    localStorage.removeItem(PIN_KEY);
+                    localStorage.removeItem('debtManagerData_backup'); 
+                    location.reload();
+                }
+            });
         }
         
         // --- End of PIN Logic ---
@@ -702,7 +710,8 @@
                                                 <p class="text-sm text-gray-600">เงินต้น: ${formatCurrency(debt.amount)} ${interestText}</p>
                                                 <p class="text-sm text-gray-600">วันที่กู้: ${formatDateToBuddhist(debt.date)} | ครบกำหนด: ${debt.dueDate ? formatDateToBuddhist(debt.dueDate) : 'ไม่มีกำหนด'}</p>
                                             </div>
-                                            <div class="flex space-x-2">
+                                            <div class="flex items-center space-x-2">
+                                                <button data-id="${debt.id}" class="view-ledger-btn text-xs bg-gray-200 px-2 py-1 rounded">🧾 ดูบัญชีรายเดือน</button>
                                                 ${debt.evidence ? `<button data-id="${debt.id}" data-type="debt" class="view-evidence-btn p-2 text-gray-500 hover:text-blue-600">📎</button>` : ''}
                                                 <button data-id="${debt.id}" class="edit-debt-btn p-2 text-gray-500 hover:text-blue-600">✏️</button>
                                                 <button data-id="${debt.id}" class="delete-debt-btn p-2 text-gray-500 hover:text-red-600">🗑️</button>
@@ -1464,6 +1473,7 @@
                 document.getElementById('debt-form')?.addEventListener('submit', handleDebtFormSubmit);
                 document.querySelectorAll('.edit-debt-btn').forEach(btn => btn.addEventListener('click', (e) => handleEditDebtClick(e.currentTarget.dataset.id)));
                 document.querySelectorAll('.delete-debt-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeleteDebtClick(e.currentTarget.dataset.id)));
+                document.querySelectorAll('.view-ledger-btn').forEach(btn => btn.addEventListener('click', e => showLedgerModal(e.currentTarget.dataset.id)));
                 document.getElementById('cancel-edit-debt')?.addEventListener('click', () => { document.getElementById('debt-form').reset(); document.getElementById('debt-id').value = ''; document.getElementById('debt-form-title').textContent = '💳 เพิ่มรายการหนี้ใหม่'; document.getElementById('cancel-edit-debt').classList.add('hidden'); document.getElementById('debt-evidence-name').textContent = 'คลิกเพื่อเลือกไฟล์'; });
                 document.getElementById('debts-search-input')?.addEventListener('input', e => { state.debtsSearchQuery = e.target.value; render(); });
                 document.getElementById('debt-evidence-file')?.addEventListener('change', e => document.getElementById('debt-evidence-name').textContent = e.target.files[0]?.name || 'คลิกเพื่อเลือกไฟล์');
