@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.15 (Ledger & PIN Reset)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.15.1 (Ledger Fix)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -156,7 +156,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.15</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.15.1</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -711,7 +711,6 @@
                                                 <p class="text-sm text-gray-600">วันที่กู้: ${formatDateToBuddhist(debt.date)} | ครบกำหนด: ${debt.dueDate ? formatDateToBuddhist(debt.dueDate) : 'ไม่มีกำหนด'}</p>
                                             </div>
                                             <div class="flex items-center space-x-2">
-                                                <button data-id="${debt.id}" class="view-ledger-btn text-xs bg-gray-200 px-2 py-1 rounded">🧾 ดูบัญชีรายเดือน</button>
                                                 ${debt.evidence ? `<button data-id="${debt.id}" data-type="debt" class="view-evidence-btn p-2 text-gray-500 hover:text-blue-600">📎</button>` : ''}
                                                 <button data-id="${debt.id}" class="edit-debt-btn p-2 text-gray-500 hover:text-blue-600">✏️</button>
                                                 <button data-id="${debt.id}" class="delete-debt-btn p-2 text-gray-500 hover:text-red-600">🗑️</button>
@@ -774,7 +773,18 @@
         };
         const renderStatement = () => {
             const debtorOptions = state.debtors.map(d => `<option value="${d.id}" ${state.statementSelectedDebtor === d.id ? 'selected' : ''}>${d.name}</option>`).join('');
-            const statementTable = state.statementSelectedDebtor ? generateDebtorStatementTable(state.statementSelectedDebtor) : generateGlobalStatementTable();
+            
+            let statementContent = '';
+            if (state.statementSelectedDebtor) {
+                const debtorDebts = state.debts.filter(d => d.debtorId === state.statementSelectedDebtor);
+                if(debtorDebts.length > 0) {
+                   statementContent = debtorDebts.map(debt => generateDebtLedgerTable(debt.id)).join('');
+                } else {
+                   statementContent = '<p class="text-center text-gray-500 py-8">ลูกหนี้คนนี้ยังไม่มีรายการหนี้</p>';
+                }
+            } else {
+                statementContent = generateGlobalStatementTable();
+            }
 
             return `
                 <div class="card bg-white p-6 rounded-lg shadow">
@@ -788,12 +798,102 @@
                             </select>
                         </div>
                     </div>
-                    <div id="statement-table-container" class="overflow-x-auto">
-                        ${statementTable}
+                    <div id="statement-table-container" class="space-y-8">
+                        ${statementContent}
                     </div>
                 </div>
             `;
         };
+        
+        const generateDebtLedgerTable = (debtId) => {
+             const debt = state.debts.find(d => d.id === debtId);
+             if (!debt) return '';
+             
+             const payments = state.payments.filter(p => p.debtId === debtId).sort((a,b) => new Date(a.date) - new Date(b.date));
+             const startDate = new Date(debt.date);
+             const endDate = new Date();
+
+             let ledgerRows = [];
+             let currentPrincipal = Number(debt.amount);
+             let lastInterestCalcDate = new Date(startDate);
+
+             // Create a map of payments by month
+             const paymentsByMonth = {};
+             payments.forEach(p => {
+                const monthKey = `${new Date(p.date).getFullYear()}-${new Date(p.date).getMonth()}`;
+                if (!paymentsByMonth[monthKey]) paymentsByMonth[monthKey] = 0;
+                paymentsByMonth[monthKey] += Number(p.amount);
+             });
+
+             let currentDate = new Date(startDate);
+             currentDate.setDate(1); // Start from the first day of the loan month
+
+             while(currentDate <= endDate) {
+                const monthKey = `${currentDate.getFullYear()}-${currentDate.getMonth()}`;
+                const principalBroughtForward = currentPrincipal;
+                
+                // Calculate interest for the month
+                let interestForMonth = 0;
+                const interestRate = Number(debt.interestRate || 0) / 100;
+                if(interestRate > 0) {
+                    const principalForInterestCalc = debt.interestType === 'compound' ? principalBroughtForward : Number(debt.amount);
+                    interestForMonth = principalForInterestCalc * interestRate;
+                }
+                
+                let interestDue = interestForMonth;
+                const totalPaymentInMonth = paymentsByMonth[monthKey] || 0;
+
+                const paidToInterest = Math.min(totalPaymentInMonth, interestDue);
+                const paidToPrincipal = totalPaymentInMonth - paidToInterest;
+
+                currentPrincipal -= paidToPrincipal;
+                if(debt.interestType === 'compound') {
+                    currentPrincipal += (interestForMonth - paidToInterest);
+                }
+
+                 // Only show rows from the start date onwards
+                if (currentDate >= startDate) {
+                     ledgerRows.push(`
+                        <tr class="border-b">
+                            <td class="p-2">${formatDateToBuddhist(currentDate, {year: 'numeric', month: 'long'})}</td>
+                            <td class="p-2 text-right">${formatCurrency(principalBroughtForward)}</td>
+                            <td class="p-2 text-right text-orange-600">${formatCurrency(interestForMonth)}</td>
+                            <td class="p-2 text-right text-green-600">${formatCurrency(totalPaymentInMonth)}</td>
+                            <td class="p-2 text-right text-red-600">${formatCurrency(-paidToInterest)}</td>
+                            <td class="p-2 text-right text-green-700">${formatCurrency(-paidToPrincipal)}</td>
+                            <td class="p-2 text-right font-semibold">${formatCurrency(currentPrincipal)}</td>
+                        </tr>
+                    `);
+                }
+
+                currentDate.setMonth(currentDate.getMonth() + 1);
+             }
+
+
+            return `
+                <div class="mb-8 border rounded-lg p-4">
+                     <h4 class="text-lg font-bold">บัญชีแยกประเภท: ${debt.type}</h4>
+                     <p class="text-sm text-gray-600 mb-2">วันที่กู้: ${formatDateToBuddhist(debt.date)} | เงินต้น: ${formatCurrency(debt.amount)} | ดอกเบี้ย: ${debt.interestRate || 0}%/เดือน (${debt.interestType === 'compound' ? 'ทบต้น' : 'เงินต้น'})</p>
+                     <div class="overflow-x-auto">
+                        <table class="w-full text-xs text-left">
+                            <thead class="bg-gray-100">
+                                <tr>
+                                    <th class="p-2">เดือน/ปี</th>
+                                    <th class="p-2 text-right">เงินต้นยกมา</th>
+                                    <th class="p-2 text-right">ดอกเบี้ยเกิดขึ้น</th>
+                                    <th class="p-2 text-right">ชำระเงิน</th>
+                                    <th class="p-2 text-right">ชำระดอกเบี้ย</th>
+                                    <th class="p-2 text-right">ลดเงินต้น</th>
+                                    <th class="p-2 text-right">เงินต้นคงเหลือ</th>
+                                </tr>
+                            </thead>
+                            <tbody>${ledgerRows.join('')}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
 
         const generateGlobalStatementTable = () => {
             const allDebtsAsTx = state.debts.map(d => ({ ...d, type: 'debt', txDate: d.date }));
@@ -1473,7 +1573,6 @@
                 document.getElementById('debt-form')?.addEventListener('submit', handleDebtFormSubmit);
                 document.querySelectorAll('.edit-debt-btn').forEach(btn => btn.addEventListener('click', (e) => handleEditDebtClick(e.currentTarget.dataset.id)));
                 document.querySelectorAll('.delete-debt-btn').forEach(btn => btn.addEventListener('click', (e) => handleDeleteDebtClick(e.currentTarget.dataset.id)));
-                document.querySelectorAll('.view-ledger-btn').forEach(btn => btn.addEventListener('click', e => showLedgerModal(e.currentTarget.dataset.id)));
                 document.getElementById('cancel-edit-debt')?.addEventListener('click', () => { document.getElementById('debt-form').reset(); document.getElementById('debt-id').value = ''; document.getElementById('debt-form-title').textContent = '💳 เพิ่มรายการหนี้ใหม่'; document.getElementById('cancel-edit-debt').classList.add('hidden'); document.getElementById('debt-evidence-name').textContent = 'คลิกเพื่อเลือกไฟล์'; });
                 document.getElementById('debts-search-input')?.addEventListener('input', e => { state.debtsSearchQuery = e.target.value; render(); });
                 document.getElementById('debt-evidence-file')?.addEventListener('change', e => document.getElementById('debt-evidence-name').textContent = e.target.files[0]?.name || 'คลิกเพื่อเลือกไฟล์');
