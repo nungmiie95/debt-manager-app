@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.16.2 (Calculation Overhaul)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.17 (Dashboard Revamp)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -125,31 +125,6 @@
             30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
             40%, 60% { transform: translate3d(4px, 0, 0); }
         }
-        
-        /* Calendar Styles */
-        .calendar-day-event {
-            position: relative;
-            cursor: pointer;
-        }
-        .calendar-day-event::after {
-            content: '';
-            position: absolute;
-            bottom: 4px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-        }
-        .event-due::after {
-            background-color: #ef4444; /* red-500 */
-        }
-        .event-interest::after {
-            background-color: #3b82f6; /* blue-500 */
-        }
-        .event-multiple::after {
-            background-image: linear-gradient(to right, #ef4444 50%, #3b82f6 50%);
-        }
 
     </style>
 </head>
@@ -181,7 +156,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.16.2</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.17</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -310,6 +285,7 @@
 
         function generateKeypad() {
             const keypadContainer = document.getElementById('keypad');
+            keypadContainer.innerHTML = '';
             const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
             keys.forEach(key => {
                 const keyEl = document.createElement('button');
@@ -423,22 +399,6 @@
             document.getElementById('modal-cancel').addEventListener('click', () => modal.remove());
             document.getElementById('modal-confirm').addEventListener('click', () => { onConfirm(); modal.remove(); });
         };
-        const showCustomModal = (title, content) => {
-            const modal = document.createElement('div');
-            modal.className = 'fixed inset-0 z-50 flex items-center justify-center modal-backdrop';
-            modal.innerHTML = `
-                <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg mx-4">
-                    <div class="flex justify-between items-center mb-4 border-b pb-2">
-                        <h3 class="text-lg font-bold">${title}</h3>
-                        <button id="modal-close" class="text-2xl text-gray-500 hover:text-gray-800">&times;</button>
-                    </div>
-                    <div>${content}</div>
-                </div>`;
-            document.getElementById('modal-container').appendChild(modal);
-            const closeModal = () => modal.remove();
-            modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-            document.getElementById('modal-close').addEventListener('click', closeModal);
-        };
 
 
         // --- STATE MANAGEMENT ---
@@ -453,7 +413,6 @@
             },
             activeTab: 'dashboard',
             statementSelectedDebtor: "", // Empty string for "All"
-            calendarDate: new Date(),
             syncStatus: 'idle', // idle, pending, syncing, success, error
             debtorsSearchQuery: '',
             debtsSearchQuery: ''
@@ -663,10 +622,8 @@
                 if (details.isOverdue) overdueDebtsCount++;
             });
             
-            const calendarHtml = renderCalendar();
+            const monthlySummaryHtml = renderMonthlySummary();
 
-            const totalDebtValue = totalPrincipal + totalInterest;
-            const paymentProgress = totalDebtValue > 0 ? (totalPaid / totalDebtValue) * 100 : 0;
             const overdueAlert = overdueDebtsCount > 0 ? `<div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-lg mb-6 animate-pulse"><p class="font-bold">🚨 แจ้งเตือนด่วน!</p><p>มีหนี้เกินกำหนดชำระจำนวน ${overdueDebtsCount} รายการ</p></div>` : '';
             
             return `
@@ -678,102 +635,89 @@
                     <div class="card bg-white p-4 rounded-lg shadow"><h3 class="text-gray-500 text-red-600">❗ หนี้คงค้าง</h3><p class="text-2xl font-bold text-red-600">${formatCurrency(totalBalance)}</p></div>
                 </div>
                 ${overdueAlert}
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div class="lg:col-span-2 card bg-white p-6 rounded-lg shadow">
-                         ${calendarHtml}
-                    </div>
-                    <div class="card bg-white p-6 rounded-lg shadow">
-                        <h3 class="text-lg font-semibold mb-4">📊 สถิติการชำระหนี้</h3>
-                        <p class="text-gray-600">ชำระแล้ว ${formatCurrency(totalPaid)} จากทั้งหมด ${formatCurrency(totalDebtValue)}</p>
-                        <div class="w-full bg-gray-200 rounded-full h-4 my-2"><div class="bg-gradient-to-r from-blue-500 to-purple-600 h-4 rounded-full" style="width: ${paymentProgress.toFixed(2)}%"></div></div>
-                        <p class="text-right font-bold">${paymentProgress.toFixed(2)}%</p>
-                    </div>
+                <div class="space-y-6">
+                    ${monthlySummaryHtml}
                 </div>`;
         };
         
-        const renderCalendar = () => {
-            const now = state.calendarDate;
-            const year = now.getFullYear();
-            const month = now.getMonth();
+        const renderMonthlySummary = () => {
+            const now = new Date();
+            const currentYear = now.getFullYear();
+            const currentMonth = now.getMonth();
             const monthName = now.toLocaleDateString('th-TH', { month: 'long', year: 'numeric', calendar: 'buddhist' });
 
-            const firstDayOfMonth = new Date(year, month, 1).getDay();
-            const daysInMonth = new Date(year, month + 1, 0).getDate();
-            const today = new Date();
+            let totalExpectedInterest = 0;
+            let trackedDebts = [];
 
-            const events = {};
             state.debts.forEach(debt => {
-                if (calculateDebtDetails(debt.id).balance <= 0) return;
+                if (calculateDebtDetails(debt.id).balance <= 0 || !debt.interestRate || debt.interestRate <= 0) return;
 
-                // Due date events
-                if (debt.dueDate) {
-                    const dueDate = new Date(debt.dueDate);
-                    if (dueDate.getFullYear() === year && dueDate.getMonth() === month) {
-                        const day = dueDate.getDate();
-                        if (!events[day]) events[day] = [];
-                        events[day].push({ type: 'due', debt });
-                    }
-                }
-                // Monthly interest events
-                else if (debt.interestRate > 0) {
-                    const startDate = new Date(debt.date);
-                    const day = startDate.getDate();
-                    if (!events[day]) events[day] = [];
-                    events[day].push({ type: 'interest', debt });
+                const { ledger } = getFullLedger(debt.id);
+                const thisMonthRow = ledger.find(row => {
+                    const rowDate = new Date(row.date);
+                    return rowDate.getFullYear() === currentYear && rowDate.getMonth() === currentMonth;
+                });
+                
+                if (thisMonthRow) {
+                    totalExpectedInterest += thisMonthRow.interestForMonth;
+                    trackedDebts.push({
+                        debtorName: state.debtors.find(d => d.id === debt.debtorId)?.name || 'N/A',
+                        interestAmount: thisMonthRow.interestForMonth,
+                        paidAmount: thisMonthRow.totalPaymentInMonth,
+                        anniversaryDay: new Date(debt.date).getDate()
+                    });
                 }
             });
 
-            let calendarHtml = `
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-lg font-semibold">🗓️ ปฏิทินติดตามหนี้</h3>
-                    <div class="flex items-center space-x-2">
-                        <button id="prev-month-btn" class="p-1 rounded-full hover:bg-gray-100">&lt;</button>
-                        <span class="font-semibold w-32 text-center">${monthName}</span>
-                        <button id="next-month-btn" class="p-1 rounded-full hover:bg-gray-100">&gt;</button>
-                    </div>
-                </div>
-                <div class="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-gray-500">
-                    <div>อา</div><div>จ</div><div>อ</div><div>พ</div><div>พฤ</div><div>ศ</div><div>ส</div>
-                </div>
-                <div class="grid grid-cols-7 gap-1 mt-2">
-            `;
-            
-            for (let i = 0; i < firstDayOfMonth; i++) {
-                calendarHtml += `<div></div>`;
-            }
-
-            for (let day = 1; day <= daysInMonth; day++) {
-                const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-                const todayClass = isToday ? 'bg-indigo-500 text-white' : 'bg-white';
+            const totalCollectedThisMonth = state.payments
+                .filter(p => {
+                    const pDate = new Date(p.date);
+                    return pDate.getFullYear() === currentYear && pDate.getMonth() === currentMonth;
+                })
+                .reduce((sum, p) => sum + Number(p.amount), 0);
                 
-                const dayEvents = events[day];
-                let eventClass = '';
-                if (dayEvents) {
-                    const hasDue = dayEvents.some(e => e.type === 'due');
-                    const hasInterest = dayEvents.some(e => e.type === 'interest');
-                    if (hasDue && hasInterest) eventClass = 'event-multiple';
-                    else if (hasDue) eventClass = 'event-due';
-                    else if (hasInterest) eventClass = 'event-interest';
-                }
+            const progress = totalExpectedInterest > 0 ? (totalCollectedThisMonth / totalExpectedInterest) * 100 : 0;
+            
+            const listHtml = trackedDebts.length > 0 ? trackedDebts
+                .sort((a,b) => a.anniversaryDay - b.anniversaryDay)
+                .map(item => `
+                <li class="flex justify-between items-center py-2 border-b">
+                    <div>
+                        <span class="font-semibold">${item.debtorName}</span>
+                        <span class="text-xs text-gray-500">(ครบกำหนดวันที่ ${item.anniversaryDay})</span>
+                    </div>
+                    <div>
+                        <span class="text-sm ${item.paidAmount >= item.interestAmount ? 'text-green-600' : 'text-orange-600'}">
+                            ชำระแล้ว ${formatCurrency(item.paidAmount)} / ${formatCurrency(item.interestAmount)}
+                        </span>
+                    </div>
+                </li>
+            `).join('') : '<li class="text-center text-gray-500 py-4">ไม่มีรายการดอกเบี้ยในเดือนนี้</li>';
 
-                const eventData = dayEvents ? `data-events='${JSON.stringify(dayEvents)}' data-day="${day}"` : '';
-
-                calendarHtml += `
-                    <div class="p-2 h-12 flex items-center justify-center rounded-lg ${todayClass} ${eventClass ? 'calendar-day-event' : ''}" ${eventData}>
-                        ${day}
-                    </div>`;
-            }
-
-            calendarHtml += `</div>`;
-            calendarHtml += `
-                <div class="mt-4 text-xs flex items-center space-x-4">
-                    <div class="flex items-center"><span class="w-3 h-3 rounded-full bg-red-500 mr-2"></span><span>วันครบกำหนด</span></div>
-                    <div class="flex items-center"><span class="w-3 h-3 rounded-full bg-blue-500 mr-2"></span><span>รอบชำระดอกเบี้ย</span></div>
+            return `
+                <div class="card bg-white p-6 rounded-lg shadow">
+                    <h3 class="text-lg font-semibold mb-4">สรุปการเก็บเงินประจำเดือน ${monthName}</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <p class="text-sm text-gray-500">ดอกเบี้ยที่คาดว่าจะได้รับ</p>
+                            <p class="text-2xl font-bold text-orange-600">${formatCurrency(totalExpectedInterest)}</p>
+                        </div>
+                        <div>
+                            <p class="text-sm text-gray-500">ยอดชำระที่ได้รับเดือนนี้ (ทั้งหมด)</p>
+                            <p class="text-2xl font-bold text-green-600">${formatCurrency(totalCollectedThisMonth)}</p>
+                        </div>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2.5 mb-4">
+                        <div class="bg-gradient-to-r from-blue-500 to-purple-600 h-2.5 rounded-full" style="width: ${Math.min(100, progress)}%"></div>
+                    </div>
+                    <h4 class="font-semibold mb-2">รายการที่ต้องติดตามในเดือนนี้</h4>
+                    <ul class="space-y-1 max-h-48 overflow-y-auto">
+                        ${listHtml}
+                    </ul>
                 </div>
             `;
-            return calendarHtml;
         };
-        
+
         const renderDebtors = () => {
             const filteredDebtors = state.debtors.filter(d => d.name.toLowerCase().includes(state.debtorsSearchQuery.toLowerCase()));
             return `
@@ -1564,40 +1508,7 @@
             document.querySelectorAll('.view-evidence-btn').forEach(btn => btn.addEventListener('click', e => { const { type, id } = e.currentTarget.dataset; const item = state[type === 'debt' ? 'debts' : 'payments'].find(i => i.id === id); if (item && item.evidence) window.open(item.evidence, '_blank'); }));
             const activeTab = state.activeTab;
             if (activeTab === 'dashboard') {
-                document.getElementById('prev-month-btn')?.addEventListener('click', () => {
-                    state.calendarDate.setMonth(state.calendarDate.getMonth() - 1);
-                    render();
-                });
-                document.getElementById('next-month-btn')?.addEventListener('click', () => {
-                    state.calendarDate.setMonth(state.calendarDate.getMonth() + 1);
-                    render();
-                });
-                 document.querySelectorAll('.calendar-day-event').forEach(dayEl => {
-                    dayEl.addEventListener('click', (e) => {
-                        const events = JSON.parse(e.currentTarget.dataset.events);
-                        const day = e.currentTarget.dataset.day;
-                        const monthName = state.calendarDate.toLocaleDateString('th-TH', { month: 'long', year: 'numeric', calendar: 'buddhist' });
-                        
-                        let content = `<ul class="space-y-2 text-sm">`;
-                        events.forEach(event => {
-                            const debtor = state.debtors.find(d => d.id === event.debt.debtorId);
-                            const label = event.type === 'due' 
-                                ? `<span class="text-red-600 font-semibold">[ครบกำหนด]</span>` 
-                                : `<span class="text-blue-600 font-semibold">[รอบดอกเบี้ย]</span>`;
-                            content += `
-                                <li class="p-2 border-b">
-                                    <div class="font-bold">${debtor.name}</div>
-                                    <div class="flex justify-between items-center text-gray-600">
-                                        <span>${label} ${event.debt.type}</span>
-                                        <span class="font-semibold">${formatCurrency(calculateDebtDetails(event.debt.id).balance)}</span>
-                                    </div>
-                                </li>`;
-                        });
-                        content += '</ul>';
-                        
-                        showCustomModal(`รายการในวันที่ ${day} ${monthName}`, content);
-                    });
-                });
+                // No specific listeners for dashboard anymore, it's just display
             }
             else if (activeTab === 'debtors') {
                 document.getElementById('debtor-form')?.addEventListener('submit', handleDebtorFormSubmit);
@@ -1644,7 +1555,6 @@
                 const parsed = JSON.parse(savedState);
                 state.settings = parsed.settings || state.settings;
                 state.statementSelectedDebtor = parsed.statementSelectedDebtor === undefined ? "" : parsed.statementSelectedDebtor;
-                if (parsed.calendarDate) state.calendarDate = new Date(parsed.calendarDate);
             }
 
             if (state.settings.googleSheetUrl) {
