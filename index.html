@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎯 ระบบจัดการลูกหนี้ V.17 (Dashboard Revamp)</title>
+    <title>🎯 ระบบจัดการลูกหนี้ V.18.1 (Statement Fix)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -156,7 +156,7 @@
         <header class="gradient-bg text-white shadow-lg sticky top-0 z-40">
             <div class="container mx-auto px-4 py-3 flex justify-between items-center">
                 <div class="flex items-center">
-                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.17</h1>
+                    <h1 class="text-xl md:text-2xl font-bold">🎯 ระบบจัดการลูกหนี้ V.18.1</h1>
                     <div id="global-sync-status" class="ml-3"></div>
                 </div>
                 <div class="relative">
@@ -399,6 +399,23 @@
             document.getElementById('modal-cancel').addEventListener('click', () => modal.remove());
             document.getElementById('modal-confirm').addEventListener('click', () => { onConfirm(); modal.remove(); });
         };
+        const showCustomModal = (title, content) => {
+            const modal = document.createElement('div');
+            modal.id = 'calendar-event-modal';
+            modal.className = 'fixed inset-0 z-50 flex items-center justify-center modal-backdrop';
+            modal.innerHTML = `
+                <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg mx-4">
+                    <div class="flex justify-between items-center mb-4 border-b pb-2">
+                        <h3 class="text-lg font-bold">${title}</h3>
+                        <button id="modal-close" class="text-2xl text-gray-500 hover:text-gray-800">&times;</button>
+                    </div>
+                    <div>${content}</div>
+                </div>`;
+            document.getElementById('modal-container').appendChild(modal);
+            const closeModal = () => modal.remove();
+            modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+            document.getElementById('modal-close').addEventListener('click', closeModal);
+        };
 
 
         // --- STATE MANAGEMENT ---
@@ -413,6 +430,7 @@
             },
             activeTab: 'dashboard',
             statementSelectedDebtor: "", // Empty string for "All"
+            calendarDate: new Date(),
             syncStatus: 'idle', // idle, pending, syncing, success, error
             debtorsSearchQuery: '',
             debtsSearchQuery: ''
@@ -659,11 +677,12 @@
                 });
                 
                 if (thisMonthRow) {
-                    totalExpectedInterest += thisMonthRow.interestForMonth;
+                    const interestToCollect = thisMonthRow.interestBroughtForward + thisMonthRow.interestForMonth;
+                    totalExpectedInterest += interestToCollect;
                     trackedDebts.push({
                         debtorName: state.debtors.find(d => d.id === debt.debtorId)?.name || 'N/A',
-                        interestAmount: thisMonthRow.interestForMonth,
-                        paidAmount: thisMonthRow.totalPaymentInMonth,
+                        interestAmount: interestToCollect,
+                        paidAmount: thisMonthRow.paidToInterest,
                         anniversaryDay: new Date(debt.date).getDate()
                     });
                 }
@@ -843,11 +862,14 @@
             
             let statementContent = '';
             if (state.statementSelectedDebtor) {
+                const debtor = state.debtors.find(d => d.id === state.statementSelectedDebtor);
+                statementContent = generateDebtorSummaryStatementTable(state.statementSelectedDebtor);
+                
                 const debtorDebts = state.debts.filter(d => d.debtorId === state.statementSelectedDebtor);
                 if(debtorDebts.length > 0) {
-                   statementContent = debtorDebts.map(debt => generateDebtLedgerTable(debt.id)).join('');
+                   statementContent += debtorDebts.map(debt => generateDebtLedgerTable(debt.id)).join('');
                 } else {
-                   statementContent = '<p class="text-center text-gray-500 py-8">ลูกหนี้คนนี้ยังไม่มีรายการหนี้</p>';
+                   statementContent += '<p class="text-center text-gray-500 py-8">ลูกหนี้คนนี้ยังไม่มีรายการหนี้</p>';
                 }
             } else {
                 statementContent = generateGlobalStatementTable();
@@ -965,33 +987,144 @@
             const netTotalClass = netTotal >= 0 ? 'text-green-600' : 'text-red-600';
 
             return `
-                <h4 class="text-lg font-bold mb-2">ภาพรวมบัญชีทั้งหมด</h4>
-                <table class="w-full text-sm text-left">
-                    <thead class="text-xs text-gray-700 uppercase bg-gray-100">
-                        <tr>
-                            <th class="p-3">วันที่</th>
-                            <th class="p-3">รายการ</th>
-                            <th class="p-3 text-right">รายรับ</th>
-                            <th class="p-3 text-right">รายจ่าย</th>
-                            <th class="p-3 text-right">คงเหลือ</th>
-                            <th class="p-3">หมายเหตุ</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${tableRowsHtml || `<tr><td colspan="6" class="text-center p-4">ไม่มีรายการ</td></tr>`}
-                    </tbody>
-                    <tfoot class="bg-gray-200 font-bold">
-                        <tr>
-                            <td colspan="2" class="p-3 text-right">ยอดรวม:</td>
-                            <td class="p-3 text-right text-green-600">${formatCurrency(totalIncome)}</td>
-                            <td class="p-3 text-right text-red-600">${formatCurrency(-totalExpense)}</td>
-                            <td class="p-3 text-right ${netTotalClass}" colspan="2">${formatCurrency(netTotal)}</td>
-                        </tr>
-                    </tfoot>
-                </table>
+                <div class="mb-8">
+                    <h4 class="text-lg font-bold mb-2">ภาพรวมบัญชีทั้งหมด</h4>
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                            <tr>
+                                <th class="p-3">วันที่</th>
+                                <th class="p-3">รายการ</th>
+                                <th class="p-3 text-right">รายรับ</th>
+                                <th class="p-3 text-right">รายจ่าย</th>
+                                <th class="p-3 text-right">คงเหลือ</th>
+                                <th class="p-3">หมายเหตุ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${tableRowsHtml || `<tr><td colspan="6" class="text-center p-4">ไม่มีรายการ</td></tr>`}
+                        </tbody>
+                        <tfoot class="bg-gray-200 font-bold">
+                            <tr>
+                                <td colspan="2" class="p-3 text-right">ยอดรวม:</td>
+                                <td class="p-3 text-right text-green-600">${formatCurrency(totalIncome)}</td>
+                                <td class="p-3 text-right text-red-600">${formatCurrency(-totalExpense)}</td>
+                                <td class="p-3 text-right ${netTotalClass}" colspan="2">${formatCurrency(netTotal)}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
             `;
         };
         
+        const generateDebtorSummaryStatementTable = (debtorId) => {
+            const debtor = state.debtors.find(d => d.id === debtorId);
+            if (!debtor) return '';
+
+            const debtorDebts = state.debts.filter(d => d.debtorId === debtorId);
+            const debtorPayments = state.payments.filter(p => p.debtorId === debtorId);
+            
+            let transactions = [
+                ...debtorDebts.map(d => ({ ...d, type: 'debt', txDate: d.date })),
+                ...debtorPayments.map(p => ({ ...p, type: 'payment', txDate: p.date }))
+            ];
+            
+            // Add monthly interest accruals as transactions
+            debtorDebts.forEach(debt => {
+                const { ledger } = getFullLedger(debt.id);
+                ledger.forEach(row => {
+                    if (row.interestForMonth > 0) {
+                        transactions.push({
+                            type: 'interest',
+                            txDate: row.date.toISOString(),
+                            amount: row.interestForMonth,
+                            debtId: debt.id
+                        });
+                    }
+                });
+            });
+
+            transactions.sort((a, b) => new Date(a.txDate) - new Date(b.txDate));
+
+            let runningBalance = 0;
+            let totalDebt = 0;
+            let totalInterest = 0;
+            let totalPaid = 0;
+
+            const tableRowsHtml = transactions.map(tx => {
+                let debtHtml = '<span class="text-gray-400">-</span>';
+                let interestHtml = '<span class="text-gray-400">-</span>';
+                let paymentHtml = '<span class="text-gray-400">-</span>';
+                let description = '';
+                let note = tx.note || tx.description || '-';
+
+                if (tx.type === 'debt') {
+                    const debtAmount = Number(tx.amount);
+                    runningBalance += debtAmount;
+                    totalDebt += debtAmount;
+                    debtHtml = `<span class="text-blue-600 font-medium">${formatCurrency(debtAmount, '+')}</span>`;
+                    description = `เงินกู้ - ${tx.type}`;
+                } else if (tx.type === 'payment') {
+                    const paymentAmount = Number(tx.amount);
+                    runningBalance -= paymentAmount;
+                    totalPaid += paymentAmount;
+                    paymentHtml = `<span class="text-green-600 font-medium">${formatCurrency(-paymentAmount)}</span>`;
+                    description = `ชำระเงิน - ${tx.method}`;
+                } else if (tx.type === 'interest') {
+                    const interestAmount = Number(tx.amount);
+                    runningBalance += interestAmount;
+                    totalInterest += interestAmount;
+                    interestHtml = `<span class="text-orange-600 font-medium">${formatCurrency(interestAmount, '+')}</span>`;
+                    description = `ดอกเบี้ยรายเดือน`;
+                }
+                
+                return `
+                    <tr class="border-b">
+                        <td class="p-3">${formatDateToBuddhist(tx.txDate)}</td>
+                        <td class="p-3">${description}</td>
+                        <td class="p-3 text-right">${debtHtml}</td>
+                        <td class="p-3 text-right">${interestHtml}</td>
+                        <td class="p-3 text-right">${paymentHtml}</td>
+                        <td class="p-3 text-right font-semibold">${formatCurrency(runningBalance)}</td>
+                        <td class="p-3 text-xs text-gray-500">${note}</td>
+                    </tr>
+                `;
+            }).join('');
+            
+            const netTotal = totalDebt + totalInterest - totalPaid;
+            const netTotalClass = netTotal >= 0 ? 'text-red-600' : 'text-green-600'; // Owed is red
+
+            return `
+                <div class="mb-8">
+                    <h4 class="text-lg font-bold mb-2">สรุปภาพรวมบัญชีของ: ${debtor.name}</h4>
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+                            <tr>
+                                <th class="p-3">วันที่</th>
+                                <th class="p-3">รายการ</th>
+                                <th class="p-3 text-right">เงินต้น</th>
+                                <th class="p-3 text-right">ดอกเบี้ย</th>
+                                <th class="p-3 text-right">ชำระเงิน</th>
+                                <th class="p-3 text-right">ยอดคงค้าง</th>
+                                <th class="p-3">หมายเหตุ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${tableRowsHtml || `<tr><td colspan="7" class="text-center p-4">ไม่มีรายการ</td></tr>`}
+                        </tbody>
+                        <tfoot class="bg-gray-200 font-bold">
+                            <tr>
+                                <td colspan="2" class="p-3 text-right">ยอดรวม:</td>
+                                <td class="p-3 text-right text-blue-600">${formatCurrency(totalDebt)}</td>
+                                <td class="p-3 text-right text-orange-600">${formatCurrency(totalInterest)}</td>
+                                <td class="p-3 text-right text-green-600">${formatCurrency(-totalPaid)}</td>
+                                <td class="p-3 text-right ${netTotalClass}" colspan="2">${formatCurrency(netTotal)}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            `;
+        };
+
         const renderSettings = () => {
              const welcomeMessage = !state.settings.googleSheetUrl ? `
                 <div class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 rounded-lg mb-6">
@@ -1577,4 +1710,3 @@
 
 </body>
 </html>
-
